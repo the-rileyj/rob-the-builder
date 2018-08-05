@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -38,7 +39,7 @@ type RJGlobal struct {
 
 // RJLocalProject is for storing local information about a given project, not committed
 type RJLocalProject struct {
-	CurrentProjectHash, Path, LastBuildHash string
+	Path, LastBuildHash string
 }
 
 // RJProject is for storing global information about a given project, committed
@@ -57,8 +58,8 @@ type RJLocal struct {
 }
 
 type arguments struct {
-	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                           string
-	add, clone, discover, flightCheck, force, initialize, initializeLocal, list, local, prune, syncronizeLocal, remove, update, updateDescription bool
+	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                  string
+	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, list, local, prune, syncronizeLocal, remove, update, updateDescription bool
 }
 
 type githubToken struct {
@@ -95,37 +96,19 @@ type response struct {
 //============================
 // File Crawler Data Structure
 
-type directorySearch struct {
-	directoryPaths []string
-	searchPaths    []string
+func buildProjectFromURL(projectURL, sitePath string) error {
+	// TODO
+	return nil
 }
 
-func checkDirectoryForSearchFile(searchFile, dirname string, pathChan chan directorySearch) {
-	returnDirectorySearched := directorySearch{make([]string, 0), make([]string, 0)}
-	f, err := os.Open(dirname)
+func buildProjectLocally(localPath, sitePath string) (string, error) {
+	// TODO
+	return "", nil
+}
 
-	if err != nil {
-		pathChan <- directorySearch{}
-		return
-	}
+func checkProjectBuildHash(oldHash, projectPath string) bool {
 
-	foundPaths, err := f.Readdir(-1)
-	f.Close()
-
-	if err != nil {
-		pathChan <- directorySearch{}
-		return
-	}
-
-	for _, foundPath := range foundPaths {
-		if foundPath.IsDir() {
-			returnDirectorySearched.directoryPaths = append(returnDirectorySearched.directoryPaths, path.Join(dirname, foundPath.Name()))
-		} else if foundPath.Name() == searchFile {
-			returnDirectorySearched.searchPaths = append(returnDirectorySearched.searchPaths, path.Join(dirname, foundPath.Name()))
-		}
-	}
-
-	pathChan <- returnDirectorySearched
+	return false
 }
 
 func checkProjectExistance(identifier string, projects []RJProject) bool {
@@ -146,23 +129,109 @@ func cloneProject(rjLocalProjectPath, rjProjectURL string) error {
 	return err
 }
 
-func fileSearcher(findFile, rootPath string, maxChanNumber int) []string {
+func dasher(rootPath string, maxChanNumber int) string {
+	type directoryHasher struct {
+		directoryPaths []string
+		fileHashes     [][20]byte
+	}
+
 	if maxChanNumber < 1 {
-		maxChanNumber = maxParallelism()
+		maxChanNumber = runtime.GOMAXPROCS(0)
 	}
 
 	currentChanNumber := 0
-	pathChan := make(chan directorySearch)
-
+	pathChan := make(chan directoryHasher, maxChanNumber)
 	checkPaths := []string{rootPath}
-	foundPaths := make([]string, 0)
+	hasher := sha1.New()
+
+	getFileHashes := func(dirname string) {
+		if f, err := os.Open(dirname); err != nil {
+			pathChan <- directoryHasher{}
+		} else {
+			foundPaths, err := f.Readdir(-1)
+			f.Close()
+			if err != nil {
+				pathChan <- directoryHasher{}
+			} else {
+				returnDirectorySearched := directoryHasher{make([]string, 0), make([][20]byte, 0)}
+				for _, foundPath := range foundPaths {
+					if foundPath.IsDir() {
+						returnDirectorySearched.directoryPaths = append(returnDirectorySearched.directoryPaths, path.Join(dirname, foundPath.Name()))
+					} else {
+						if fileBytes, err := ioutil.ReadFile(path.Join(dirname, foundPath.Name())); err == nil {
+							returnDirectorySearched.fileHashes = append(returnDirectorySearched.fileHashes, sha1.Sum(fileBytes))
+						}
+					}
+				}
+				pathChan <- returnDirectorySearched
+			}
+		}
+	}
 
 	for len(checkPaths) != 0 || currentChanNumber != 0 {
 		if len(checkPaths) != 0 && currentChanNumber != maxChanNumber {
 			checkPath := checkPaths[0]
 			checkPaths = append(checkPaths[:0], checkPaths[1:]...)
 
-			go checkDirectoryForSearchFile(findFile, checkPath, pathChan)
+			go getFileHashes(checkPath)
+			currentChanNumber++
+		} else {
+			pathSearch := <-pathChan
+			currentChanNumber--
+
+			checkPaths = append(checkPaths, pathSearch.directoryPaths...)
+			for _, fileHash := range pathSearch.fileHashes {
+				hasher.Write(fileHash[:])
+			}
+		}
+	}
+
+	return fmt.Sprintf("%x", hasher.Sum(nil))
+}
+
+func fileSearcher(findFile, rootPath string, maxChanNumber int) []string {
+	type directorySearch struct {
+		directoryPaths []string
+		searchPaths    []string
+	}
+
+	if maxChanNumber < 1 {
+		maxChanNumber = runtime.GOMAXPROCS(0)
+	}
+
+	currentChanNumber := 0
+	pathChan := make(chan directorySearch, maxChanNumber)
+	checkPaths := []string{rootPath}
+	foundPaths := make([]string, 0)
+
+	checkDirectoryForSearchFile := func(searchFile, dirname string) {
+		if f, err := os.Open(dirname); err != nil {
+			pathChan <- directorySearch{}
+		} else {
+			foundPaths, err := f.Readdir(-1)
+			f.Close()
+			if err != nil {
+				pathChan <- directorySearch{}
+			} else {
+				returnDirectorySearched := directorySearch{make([]string, 0), make([]string, 0)}
+				for _, foundPath := range foundPaths {
+					if foundPath.IsDir() {
+						returnDirectorySearched.directoryPaths = append(returnDirectorySearched.directoryPaths, path.Join(dirname, foundPath.Name()))
+					} else if foundPath.Name() == searchFile {
+						returnDirectorySearched.searchPaths = append(returnDirectorySearched.searchPaths, path.Join(dirname, foundPath.Name()))
+					}
+				}
+				pathChan <- returnDirectorySearched
+			}
+		}
+	}
+
+	for len(checkPaths) != 0 || currentChanNumber != 0 {
+		if len(checkPaths) != 0 && currentChanNumber != maxChanNumber {
+			checkPath := checkPaths[0]
+			checkPaths = append(checkPaths[:0], checkPaths[1:]...)
+
+			go checkDirectoryForSearchFile(findFile, checkPath)
 			currentChanNumber++
 		} else {
 			pathSearch := <-pathChan
@@ -400,15 +469,6 @@ func localProjectSynced(localProjectPath, projectURL, projectName string) (bool,
 	return localProjectHash == remoteProjectHash, nil
 }
 
-func maxParallelism() int {
-	maxProcs := runtime.GOMAXPROCS(0)
-	numCPU := runtime.NumCPU()
-	if maxProcs < numCPU {
-		return maxProcs
-	}
-	return numCPU
-}
-
 func parseArguments() arguments {
 	var args arguments
 	flag.StringVar(&args.tokenFilePath, "t", "./token.json", "Name of the json file in the project root with the gitlab token for gathering the project descriptions, or the token directly.")
@@ -419,6 +479,7 @@ func parseArguments() arguments {
 	flag.StringVar(&args.updateLocalPath, "lp", "", "Path on the machine, where the project should be built from. No-op if not used in conjunction with 'up' command line argument.")
 
 	flag.BoolVar(&args.add, "add", false, "Adds the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.")
+	flag.BoolVar(&args.build, "build", false, "Builds either the local project specified by 'project' or all local projects if 'project' is not specified; will check the last build hash prior to building and if they are the same then the project will only be rebuild if the '-force' flag is included.")
 	flag.BoolVar(&args.clone, "clone", false, "Clones the local project specified by 'project' if it does not have a local hash or all local projects which do not have a local hash if 'project' is not specified; NOTE: this will clear the whole directory prior to cloning.")
 	flag.BoolVar(&args.updateDescription, "desc", false, "Used in conjuction with 'up', update the descriptions for the projects.")
 	flag.BoolVar(&args.discover, "discover", false, "Search for RJtag's correlating to the ID's of the projects in RJglobal, starting in 'SearchPath' specified in the RJlocal file.")
@@ -1067,7 +1128,7 @@ func main() {
 	if args.clone {
 		if args.selectProject == "" {
 			for _, rjProject := range rjInfo.RJGlobal.Projects {
-				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
+				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists {
 					if rjLocalProject.Path != "" {
 						if _, err := getLocalProjectCommit(rjLocalProject.Path); err == nil {
 							if args.force {
@@ -1100,7 +1161,7 @@ func main() {
 		} else {
 			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
 				rjProject := rjInfo.RJGlobal.Projects[index]
-				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
+				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists {
 					if rjLocalProject.Path != "" {
 						if _, err := getLocalProjectCommit(rjLocalProject.Path); err == nil {
 							if args.force {
@@ -1128,6 +1189,54 @@ func main() {
 					}
 				} else {
 					fmt.Printf("Project '%s' does not exist locally.", rjProject.Name)
+				}
+			} else {
+				fmt.Println("Project specified does not exist.")
+			}
+		}
+	}
+
+	if args.build {
+		if args.selectProject == "" {
+			for _, rjProject := range rjInfo.RJGlobal.Projects {
+				fmt.Println(rjProject)
+			}
+		} else {
+			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
+				rjProject := rjInfo.RJGlobal.Projects[index]
+				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
+					if rjLocalProject.LastBuildHash != "" {
+						if build := checkProjectBuildHash(rjLocalProject.LastBuildHash, rjLocalProject.Path); build || args.force {
+							if !build {
+								fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, build is being forced.", rjProject.Name)
+							}
+							if newBuildHash, err := buildProjectLocally(rjLocalProject.Path, rjProject.SitePath); err == nil {
+								fmt.Printf("Project '%s' successfully built to sitepath '%s'.", rjProject.Name, rjProject.SitePath)
+								rjLocalProject.LastBuildHash = newBuildHash
+								update = true
+							} else {
+								fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
+							}
+						} else {
+							fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, building skipped; to force building, specify the '-force' flag.", rjProject.Name)
+						}
+					} else {
+						fmt.Printf("Project '%s' does not have previous build hash, building now.", rjProject.Name)
+						if newBuildHash, err := buildProjectLocally(rjLocalProject.Path, rjProject.SitePath); err == nil {
+							fmt.Printf("Project '%s' successfully built to sitepath '%s'.", rjProject.Name, rjProject.SitePath)
+							rjLocalProject.LastBuildHash = newBuildHash
+							update = true
+						} else {
+							fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
+						}
+					}
+				} else {
+					fmt.Printf("Project '%s' does not exist locally, building in container.", rjProject.Name)
+					if err = buildProjectFromURL(rjProject.URL, rjProject.SitePath); err == nil {
+						fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjProject.SitePath)
+					} else {
+						fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
+					}
 				}
 			} else {
 				fmt.Println("Project specified does not exist.")
