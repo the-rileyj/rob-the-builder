@@ -1,4 +1,4 @@
-package rob
+package main
 
 import (
 	"bytes"
@@ -24,20 +24,24 @@ import (
 //==================
 // Local Use Structs
 
+// RJInfo is for centralizing global and local information for the program's use
 type RJInfo struct {
-	RJConfig
+	RJGlobal
 	RJLocal
 	token string
 }
 
-type RJConfig struct {
+// RJGlobal is for storing global information about projects, committed
+type RJGlobal struct {
 	Projects []RJProject `json:"projects"`
 }
 
+// RJLocalProject is for storing local information about a given project, not committed
 type RJLocalProject struct {
 	CurrentProjectHash, Path, LastBuildHash string
 }
 
+// RJProject is for storing global information about a given project, committed
 type RJProject struct {
 	Description string `json:"description"`
 	ID          string `json:"id"`
@@ -46,7 +50,7 @@ type RJProject struct {
 	URL         string `json:"url"`
 }
 
-//RJlocal.json file has mapping of {searchDir:string, id:path} locally, not including in github repo
+// RJLocal is for storing local information about projects and where to start searching for local projects, not committed
 type RJLocal struct {
 	Projects    map[string]RJLocalProject `json:"projects"`
 	SearchPaths []string                  `json:"searchPaths"`
@@ -134,6 +138,7 @@ func checkProjectExistance(identifier string, projects []RJProject) bool {
 }
 
 func cloneProject(rjLocalProjectPath, rjProjectURL string) error {
+	removeContents(rjLocalProjectPath)
 	_, err := git.PlainClone(rjLocalProjectPath, false, &git.CloneOptions{
 		URL:               rjProjectURL,
 		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
@@ -276,22 +281,22 @@ func getProjectDescription(projectName, token string) (string, error) {
 	return descriptionResponse.Data.Repository.Description, nil
 }
 
-func getRjConfig(projectRootPath string) (RJConfig, error) {
-	var rjConfig RJConfig
+func getRjGlobal(projectRootPath string) (RJGlobal, error) {
+	var rjGlobal RJGlobal
 
-	rjConfigFile, err := os.Open(path.Join(projectRootPath, "RJconfig.json"))
+	rjGlobalFile, err := os.Open(path.Join(projectRootPath, "RJglobal.json"))
 
-	defer rjConfigFile.Close()
+	defer rjGlobalFile.Close()
 
 	if err != nil {
-		return RJConfig{}, err
+		return RJGlobal{}, err
 	}
 
-	if err := json.NewDecoder(rjConfigFile).Decode(&rjConfig); err != nil {
-		return RJConfig{}, err
+	if err := json.NewDecoder(rjGlobalFile).Decode(&rjGlobal); err != nil {
+		return RJGlobal{}, err
 	}
 
-	return rjConfig, nil
+	return rjGlobal, nil
 }
 
 func getRjLocal(projectRootPath string) (RJLocal, error) {
@@ -312,33 +317,33 @@ func getRjLocal(projectRootPath string) (RJLocal, error) {
 	return rjLocal, nil
 }
 
-func initializeConfig(projectRootPath string, force bool) (RJConfig, error) {
+func initializeGlobal(projectRootPath string, force bool) (RJGlobal, error) {
 	if _, err := os.Stat(projectRootPath); err != nil {
-		return RJConfig{}, errors.New("path to project root does not exist")
+		return RJGlobal{}, errors.New("path to project root does not exist")
 	}
 
-	if _, err := os.Stat(path.Join(projectRootPath, "RJconfig.json")); err == nil && !force {
-		return RJConfig{}, errors.New("path to RJconfig file already exists, add the -force flag to overwrite the current config file")
+	if _, err := os.Stat(path.Join(projectRootPath, "RJglobal.json")); err == nil && !force {
+		return RJGlobal{}, errors.New("path to RJglobal file already exists, add the -force flag to overwrite the current config file")
 	}
 
-	rjConfigFile, err := os.Create(path.Join(projectRootPath, "RJconfig.json"))
+	rjGlobalFile, err := os.Create(path.Join(projectRootPath, "RJglobal.json"))
 
-	defer rjConfigFile.Close()
+	defer rjGlobalFile.Close()
 
 	if err != nil {
-		return RJConfig{}, err
+		return RJGlobal{}, err
 	}
 
-	rjConfig := RJConfig{Projects: make([]RJProject, 0)}
+	rjGlobal := RJGlobal{Projects: make([]RJProject, 0)}
 
-	if err = json.NewEncoder(rjConfigFile).Encode(&rjConfig); err != nil {
-		return RJConfig{}, errors.Wrap(err, "error initializing RJconfig file")
+	if err = json.NewEncoder(rjGlobalFile).Encode(&rjGlobal); err != nil {
+		return RJGlobal{}, errors.Wrap(err, "error initializing RJglobal file")
 	}
 
-	return rjConfig, nil
+	return rjGlobal, nil
 }
 
-func initializeLocal(projectRoot string, rjConfig RJConfig, force bool) (RJLocal, error) {
+func initializeLocal(projectRoot string, rjGlobal RJGlobal, force bool) (RJLocal, error) {
 	if _, err := os.Stat(projectRoot); err != nil {
 		return RJLocal{}, errors.New("Path to project root does not exist")
 	}
@@ -357,12 +362,12 @@ func initializeLocal(projectRoot string, rjConfig RJConfig, force bool) (RJLocal
 
 	rjLocal := RJLocal{make(map[string]RJLocalProject), make([]string, 0)}
 
-	for _, rjProject := range rjConfig.Projects {
+	for _, rjProject := range rjGlobal.Projects {
 		rjLocal.Projects[rjProject.ID] = RJLocalProject{}
 	}
 
 	if err = json.NewEncoder(rjLocalFile).Encode(&rjLocal); err != nil {
-		printAndExitf("Error initializing RJconfig file: %s", err)
+		printAndExitf("Error initializing RJglobal file: %s", err)
 	}
 
 	return rjLocal, nil
@@ -406,24 +411,24 @@ func maxParallelism() int {
 
 func parseArguments() arguments {
 	var args arguments
-	flag.StringVar(&args.tokenFilePath, "token-name", "token.json", "Name of the json file in the project root with the gitlab token for gathering the project descriptions.")
-	flag.StringVar(&args.projectRoot, "root-path", "./", "Path to the project root.")
-	flag.StringVar(&args.selectProject, "project", "", "Project selection for creating, reading, updating, and deleting; if creating this should be the Github URL of project you want to add.")
-	flag.StringVar(&args.updateSearchPath, "search-path", "", "The path where the auto discovery for directories with RJtag's should start searching. No-op if not used in conjunction with 'local' command line argument, as well as 'add', 'up', or 'rm'.")
-	flag.StringVar(&args.updateSitePath, "site-path", "", "Path relative to the root of the rj website project, where the project should be output to when built. No-op if not used in conjunction with 'up' command line argument.")
-	flag.StringVar(&args.updateLocalPath, "local-path", "", "Path on the machine, where the project should be built from. No-op if not used in conjunction with 'up' command line argument.")
+	flag.StringVar(&args.tokenFilePath, "t", "./token.json", "Name of the json file in the project root with the gitlab token for gathering the project descriptions, or the token directly.")
+	flag.StringVar(&args.projectRoot, "rp", "./", "Path to the project root.")
+	flag.StringVar(&args.selectProject, "p", "", "Project selection for creating, reading, updating, and deleting; if creating this should be the Github URL of project you want to add.")
+	flag.StringVar(&args.updateSearchPath, "sep", "", "The path where the auto discovery for directories with RJtag's should start searching. No-op if not used in conjunction with 'local' command line argument, as well as 'add', 'up', or 'rm'.")
+	flag.StringVar(&args.updateSitePath, "sip", "", "Path relative to the root of the rj website project, where the project should be output to when built. No-op if not used in conjunction with 'up' command line argument.")
+	flag.StringVar(&args.updateLocalPath, "lp", "", "Path on the machine, where the project should be built from. No-op if not used in conjunction with 'up' command line argument.")
 
 	flag.BoolVar(&args.add, "add", false, "Adds the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.")
-	flag.BoolVar(&args.clone, "clone", false, "Clones the local project specified by 'project' if it does not have a local hash or all local projects which do not have a local hash if 'project' is not specified.")
+	flag.BoolVar(&args.clone, "clone", false, "Clones the local project specified by 'project' if it does not have a local hash or all local projects which do not have a local hash if 'project' is not specified; NOTE: this will clear the whole directory prior to cloning.")
 	flag.BoolVar(&args.updateDescription, "desc", false, "Used in conjuction with 'up', update the descriptions for the projects.")
-	flag.BoolVar(&args.discover, "discover", false, "Search for RJtag's correlating to the ID's of the projects in RJconfig, starting in 'SearchPath' specified in the RJlocal file.")
+	flag.BoolVar(&args.discover, "discover", false, "Search for RJtag's correlating to the ID's of the projects in RJglobal, starting in 'SearchPath' specified in the RJlocal file.")
 	flag.BoolVar(&args.force, "force", false, "Force the operation(s); be careful.")
-	flag.BoolVar(&args.initialize, "init", false, "Initialize a new RJconfig file if not already created. Can be forced.")
-	flag.BoolVar(&args.initializeLocal, "initLocal", false, "Initialize a new RJconfig file if not already created. Can be forced.")
+	flag.BoolVar(&args.initialize, "init", false, "Initialize a new RJglobal file if not already created. Can be forced.")
+	flag.BoolVar(&args.initializeLocal, "init-local", false, "Initialize a new RJglobal file if not already created. Can be forced.")
 	flag.BoolVar(&args.flightCheck, "flight", false, "Prints the output of the 'pre-flight check'.")
-	flag.BoolVar(&args.local, "local", false, "Modifies the behaviour of some commands to only have affects on the RJlocal config.")
+	flag.BoolVar(&args.local, "l", false, "Modifies the behaviour of some commands to only have affects on the RJlocal config.")
 	flag.BoolVar(&args.list, "ls", false, "Lists the details of the project specified by 'project', or all projects if none are specified or found, as pretty printed JSON.")
-	flag.BoolVar(&args.prune, "prune", false, "Deletes all local projects not found in RJconfig.")
+	flag.BoolVar(&args.prune, "prune", false, "Deletes all local projects not found in RJglobal.")
 	flag.BoolVar(&args.syncronizeLocal, "sync", false, "Checks the local git hash against what's in the remote repo and updates either the local project specified by 'project' or all local projects if 'project' is not specified.")
 	flag.BoolVar(&args.remove, "rm", false, "Removes the project specified by 'project', adding the 'local' flag will only delete it locally..")
 	flag.BoolVar(&args.update, "up", false, "Updates the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.")
@@ -471,21 +476,21 @@ func parseUpdateSearchPath(inputString string, oldPaths []string) ([]string, err
 }
 
 func preFlightCheck(projectRootPath string) (bool, bool, error) {
-	var rjConfigExists, rjLocalExists bool
+	var rjGlobalExists, rjLocalExists bool
 
 	if _, err := os.Stat(projectRootPath); err != nil {
 		return false, false, errors.New("Path to project root does not exist")
 	}
 
-	if _, err := os.Stat(path.Join(projectRootPath, "RJconfig.json")); err == nil {
-		rjConfigExists = true
+	if _, err := os.Stat(path.Join(projectRootPath, "RJglobal.json")); err == nil {
+		rjGlobalExists = true
 	}
 
 	if _, err := os.Stat(path.Join(projectRootPath, "RJlocal.json")); err == nil {
 		rjLocalExists = true
 	}
 
-	return rjConfigExists, rjLocalExists, nil
+	return rjGlobalExists, rjLocalExists, nil
 }
 
 func prettyPrintStruct(structure interface{}) error {
@@ -552,6 +557,30 @@ func pruneLocal(projects []RJProject, localProjects map[string]RJLocalProject) m
 	return returnProjects
 }
 
+func removeContents(directoryPath string) error {
+	directory, err := os.Open(directoryPath)
+
+	if err != nil {
+		return err
+	}
+
+	fileNames, err := directory.Readdirnames(-1)
+	directory.Close()
+
+	if err != nil {
+		return err
+	}
+
+	for _, fileName := range fileNames {
+		err = os.RemoveAll(filepath.Join(directoryPath, fileName))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func syncronizeLocal(project RJProject, localProject RJLocalProject) (bool, error) {
 	localProjectIsSynced, err := localProjectSynced(localProject.Path, project.URL, project.Name)
 
@@ -599,15 +628,15 @@ func writeRjTag(projectID, localPath string) error {
 }
 
 func writeUpdate(projectRootPath string, rjInfo RJInfo) error {
-	rjConfigFile, err := os.Create(path.Join(projectRootPath, "RJconfig.json"))
+	rjGlobalFile, err := os.Create(path.Join(projectRootPath, "RJglobal.json"))
 
-	defer rjConfigFile.Close()
+	defer rjGlobalFile.Close()
 
 	if err != nil {
 		return err
 	}
 
-	if err = json.NewEncoder(rjConfigFile).Encode(&rjInfo.RJConfig); err != nil {
+	if err = json.NewEncoder(rjGlobalFile).Encode(&rjInfo.RJGlobal); err != nil {
 		return err
 	}
 
@@ -632,10 +661,10 @@ func main() {
 
 	args := parseArguments()
 
-	rjConfigExists, rjLocalExists, err := preFlightCheck(args.projectRoot)
+	rjGlobalExists, rjLocalExists, err := preFlightCheck(args.projectRoot)
 
 	if args.flightCheck {
-		fmt.Printf("RJconfig file exists: %v\nRJlocal file exists:  %v\n", rjConfigExists, rjLocalExists)
+		fmt.Printf("RJglobal file exists: %v\nRJlocal file exists:  %v\n", rjGlobalExists, rjLocalExists)
 	}
 
 	if err != nil {
@@ -644,11 +673,14 @@ func main() {
 
 	if args.initialize {
 		// Initialize only if asked, will not be created automatically
-		rjInfo.RJConfig, err = initializeConfig(args.projectRoot, args.force)
-	} else if rjConfigExists {
-		rjInfo.RJConfig, err = getRjConfig(args.projectRoot)
-	} else if !rjConfigExists {
-		printAndExit("RJconfig must be initialized before executing any command besides 'flight' and 'init'.")
+		rjInfo.RJGlobal, err = initializeGlobal(args.projectRoot, args.force)
+	} else if rjGlobalExists {
+		rjInfo.RJGlobal, err = getRjGlobal(args.projectRoot)
+	} else if !rjGlobalExists {
+		if !args.flightCheck {
+			fmt.Println("RJglobal must be initialized before executing any command besides 'flight' and 'init'.")
+		}
+		os.Exit(0)
 	}
 
 	if err != nil {
@@ -657,13 +689,13 @@ func main() {
 
 	if args.initializeLocal {
 		// RJlocal will be created automatically, however it can be remade if 'args.initializeLocal' and 'args.force' are true
-		rjInfo.RJLocal, err = initializeLocal(args.projectRoot, rjInfo.RJConfig, args.force)
+		rjInfo.RJLocal, err = initializeLocal(args.projectRoot, rjInfo.RJGlobal, args.force)
 	} else {
 		if rjLocalExists {
 			rjInfo.RJLocal, err = getRjLocal(args.projectRoot)
-		} else if rjConfigExists {
-			// RJlocal will only be automatically created if an RJconfig exists
-			rjInfo.RJLocal, err = initializeLocal(args.projectRoot, rjInfo.RJConfig, args.force)
+		} else if rjGlobalExists {
+			// RJlocal will only be automatically created if an RJglobal exists
+			rjInfo.RJLocal, err = initializeLocal(args.projectRoot, rjInfo.RJGlobal, args.force)
 		}
 	}
 
@@ -672,28 +704,27 @@ func main() {
 	}
 
 	if args.token != "" {
-		rjInfo.token = args.token
-	} else if args.token != "" {
-		rjInfo.token, err = getGithubToken(args.tokenFilePath)
-
-		if err != nil {
-			fmt.Println(errors.Wrap(err, "could not get token from token.json"))
+		if _, err := os.Stat(args.token); err == nil {
+			rjInfo.token, err = getGithubToken(args.tokenFilePath)
+			if err != nil {
+				fmt.Println(errors.Wrap(err, "could not get token from token.json"))
+			}
+		} else {
+			rjInfo.token = args.token
 		}
+
+		rjInfo.token = args.token
 	} else {
 		rjInfo.token, err = getGithubToken("./token.json")
-
-		if err != nil {
-			fmt.Println(errors.Wrap(err, "could not get token from token.json"))
-		}
 	}
 
 	if args.local {
 		if args.list {
 			if args.selectProject != "" {
-				index := getProjectIndex(args.selectProject, rjInfo.RJConfig.Projects)
+				index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects)
 
 				if index != -1 {
-					printProject(rjInfo.RJConfig.Projects[index], rjInfo.RJLocal)
+					printProject(rjInfo.RJGlobal.Projects[index], rjInfo.RJLocal)
 				} else {
 					fmt.Println("Project specified does not exist.")
 				}
@@ -702,13 +733,13 @@ func main() {
 			}
 		} else if args.update {
 			if args.selectProject != "" {
-				index := getProjectIndex(args.selectProject, rjInfo.RJConfig.Projects)
+				index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects)
 				if index != -1 {
-					projectID := rjInfo.RJConfig.Projects[index].ID
+					projectID := rjInfo.RJGlobal.Projects[index].ID
 					rjLocalProject, localProjectExists := rjInfo.RJLocal.Projects[projectID]
 
 					if args.updateSitePath != "" {
-						rjInfo.RJConfig.Projects[index].SitePath = args.updateSitePath
+						rjInfo.RJGlobal.Projects[index].SitePath = args.updateSitePath
 						update = true
 					}
 
@@ -735,14 +766,45 @@ func main() {
 			if args.updateSearchPath != "" {
 				rjInfo.RJLocal.SearchPaths = append(rjInfo.RJLocal.SearchPaths, args.updateSearchPath)
 				update = true
+			} else if args.updateLocalPath != "" {
+				if args.selectProject != "" {
+					index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects)
+					if index != -1 {
+						projectID := rjInfo.RJGlobal.Projects[index].ID
+						rjLocalProject, localProjectExists := rjInfo.RJLocal.Projects[projectID]
+
+						if localProjectExists && args.updateLocalPath != "" {
+							rjLocalProject.Path = args.updateLocalPath
+
+							if err = writeRjTag(projectID, args.updateLocalPath); err != nil {
+								fmt.Println(errors.Wrap(err, "problem automatically writing to the .RJtag file in the new project's local path"))
+							}
+
+							update = true
+						}
+
+						if localProjectExists {
+							rjInfo.RJLocal.Projects[projectID] = rjLocalProject
+						}
+					} else {
+						fmt.Println("Project specified does not exist.")
+					}
+				} else {
+					fmt.Println("Cannot add the local path to a project if a project is not specified.")
+				}
+			} else {
+				fmt.Println("Nothing specified to add locally.")
 			}
 		} else if args.remove {
 			if args.selectProject != "" {
-				if index := getProjectIndex(args.selectProject, rjInfo.RJConfig.Projects); index != -1 {
-					projectName := rjInfo.RJConfig.Projects[index].Name
+				if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
+					projectName := rjInfo.RJGlobal.Projects[index].Name
+					projectID := rjInfo.RJGlobal.Projects[index].ID
 
-					if _, localProjectExists := rjInfo.RJLocal.Projects[rjInfo.RJConfig.Projects[index].ID]; localProjectExists {
-						delete(rjInfo.RJLocal.Projects, rjInfo.RJConfig.Projects[index].ID)
+					if _, localProjectExists := rjInfo.RJLocal.Projects[projectID]; localProjectExists {
+						os.Remove(path.Join(rjInfo.RJLocal.Projects[projectID].Path, ".RJtag"))
+
+						delete(rjInfo.RJLocal.Projects, projectID)
 						fmt.Printf("Project successfully deleted %s locally.\n", projectName)
 						update = true
 					} else {
@@ -777,32 +839,37 @@ func main() {
 	} else {
 		if args.list {
 			if args.selectProject == "" {
-				for _, project := range rjInfo.RJConfig.Projects {
+				for _, project := range rjInfo.RJGlobal.Projects {
 					printProject(project, rjInfo.RJLocal)
 				}
 			} else {
-				index := getProjectIndex(args.selectProject, rjInfo.RJConfig.Projects)
+				index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects)
 
 				if index != -1 {
-					printProject(rjInfo.RJConfig.Projects[index], rjInfo.RJLocal)
+					printProject(rjInfo.RJGlobal.Projects[index], rjInfo.RJLocal)
 				} else {
 					fmt.Println("Project specified does not exist.")
 				}
 			}
 		} else if args.update {
 			if args.selectProject != "" {
-				index := getProjectIndex(args.selectProject, rjInfo.RJConfig.Projects)
+				index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects)
 				if index != -1 {
-					projectID := rjInfo.RJConfig.Projects[index].ID
+					projectID := rjInfo.RJGlobal.Projects[index].ID
 					rjLocalProject, localProjectExists := rjInfo.RJLocal.Projects[projectID]
 
 					if args.updateSitePath != "" {
-						rjInfo.RJConfig.Projects[index].SitePath = args.updateSitePath
+						rjInfo.RJGlobal.Projects[index].SitePath = args.updateSitePath
 						update = true
 					}
 
 					if localProjectExists && args.updateLocalPath != "" {
 						rjLocalProject.Path = args.updateLocalPath
+
+						if err = writeRjTag(projectID, args.updateLocalPath); err != nil {
+							fmt.Println(errors.Wrap(err, "problem automatically writing to the .RJtag file in the new project's local path"))
+						}
+
 						update = true
 					}
 
@@ -814,7 +881,7 @@ func main() {
 				}
 			} else {
 				if rjInfo.token != "" {
-					for index, rjProject := range rjInfo.RJConfig.Projects {
+					for index, rjProject := range rjInfo.RJGlobal.Projects {
 						var newDescription string
 						newDescription, err = getProjectDescription(rjProject.Name, rjInfo.token)
 
@@ -822,7 +889,7 @@ func main() {
 							fmt.Println(errors.Wrapf(err, "problem fetching description for Project '%s'", rjProject.Name))
 						} else {
 							if newDescription != rjProject.Description {
-								rjInfo.RJConfig.Projects[index].Description = newDescription
+								rjInfo.RJGlobal.Projects[index].Description = newDescription
 								fmt.Printf("Description for Project '%s' successfully updated.", rjProject.Name)
 								update = true
 							}
@@ -837,48 +904,54 @@ func main() {
 				}
 			}
 		} else if args.add {
-			if !checkProjectExistance(args.selectProject, rjInfo.RJConfig.Projects) {
-				if _, err := url.ParseRequestURI(args.selectProject); err == nil {
-					projectID := generateID()
-
-					rjProject := RJProject{
-						ID:       projectID,
-						Name:     path.Base(args.selectProject),
-						SitePath: args.updateSitePath,
-						URL:      args.selectProject,
-					}
-
-					rjProject.Description, err = getProjectDescription(rjProject.Name, rjInfo.token)
-
-					if err != nil {
-						fmt.Println("Could not fetch description, defaulting to blank.")
-						rjProject.Description = ""
-					}
-
-					rjInfo.RJConfig.Projects = append(rjInfo.RJConfig.Projects, rjProject)
-					rjInfo.RJLocal.Projects[projectID] = RJLocalProject{Path: args.updateLocalPath}
-
-					if args.updateLocalPath != "" {
-						if err = writeRjTag(projectID, args.updateLocalPath); err != nil {
-							fmt.Println(errors.Wrap(err, "problem automatically writing to the .RJtag file in the new project's local path"))
-						}
-					}
-
-					update = true
-				} else {
-					fmt.Println("Project URL is not valid.")
-				}
+			if args.updateSearchPath != "" || args.updateLocalPath != "" {
+				fmt.Println("Don't forget to add the '-l' flag if you want to adjust the local search path or update the local path of a project.")
 			} else {
-				fmt.Println("Project with that URL already exists.")
+				if !checkProjectExistance(args.selectProject, rjInfo.RJGlobal.Projects) {
+					if _, err := url.ParseRequestURI(args.selectProject); err == nil {
+						projectID := generateID()
+
+						rjProject := RJProject{
+							ID:       projectID,
+							Name:     path.Base(args.selectProject),
+							SitePath: path.Join("./projects/", path.Base(args.selectProject)),
+							URL:      args.selectProject,
+						}
+
+						os.MkdirAll(rjProject.SitePath, os.ModePerm)
+
+						rjProject.Description, err = getProjectDescription(rjProject.Name, rjInfo.token)
+
+						if err != nil {
+							fmt.Println("Could not fetch description, defaulting to blank.")
+							rjProject.Description = ""
+						}
+
+						rjInfo.RJGlobal.Projects = append(rjInfo.RJGlobal.Projects, rjProject)
+						rjInfo.RJLocal.Projects[projectID] = RJLocalProject{Path: args.updateLocalPath}
+
+						if args.updateLocalPath != "" {
+							if err = writeRjTag(projectID, args.updateLocalPath); err != nil {
+								fmt.Println(errors.Wrap(err, "problem automatically writing to the .RJtag file in the new project's local path"))
+							}
+						}
+
+						update = true
+					} else {
+						fmt.Println("Project URL is not valid.")
+					}
+				} else {
+					fmt.Println("Project with that URL already exists.")
+				}
 			}
 		} else if args.remove {
-			if index := getProjectIndex(args.selectProject, rjInfo.RJConfig.Projects); index != -1 {
-				projectName := rjInfo.RJConfig.Projects[index].Name
+			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
+				projectName := rjInfo.RJGlobal.Projects[index].Name
 
-				_, localProjectExists := rjInfo.RJLocal.Projects[rjInfo.RJConfig.Projects[index].ID]
+				_, localProjectExists := rjInfo.RJLocal.Projects[rjInfo.RJGlobal.Projects[index].ID]
 
 				if localProjectExists {
-					delete(rjInfo.RJLocal.Projects, rjInfo.RJConfig.Projects[index].ID)
+					delete(rjInfo.RJLocal.Projects, rjInfo.RJGlobal.Projects[index].ID)
 				}
 
 				if args.local {
@@ -888,7 +961,7 @@ func main() {
 						fmt.Println("Project specified does not exist locally.")
 					}
 				} else {
-					rjInfo.RJConfig.Projects = append(rjInfo.RJConfig.Projects[:index], rjInfo.RJConfig.Projects[index+1:]...)
+					rjInfo.RJGlobal.Projects = append(rjInfo.RJGlobal.Projects[:index], rjInfo.RJGlobal.Projects[index+1:]...)
 
 					fmt.Printf("Deleted Project %s\n", projectName)
 					update = true
@@ -901,7 +974,7 @@ func main() {
 
 	if args.prune {
 		localProjectsBefore := len(rjInfo.RJLocal.Projects)
-		rjInfo.RJLocal.Projects = pruneLocal(rjInfo.RJConfig.Projects, rjInfo.RJLocal.Projects)
+		rjInfo.RJLocal.Projects = pruneLocal(rjInfo.RJGlobal.Projects, rjInfo.RJLocal.Projects)
 		localProjectsAfter := len(rjInfo.RJLocal.Projects)
 
 		if localProjectsAfter == localProjectsBefore {
@@ -928,7 +1001,7 @@ func main() {
 				}
 			}
 
-			rjInfo.RJLocal.Projects = pruneLocal(rjInfo.RJConfig.Projects, rjInfo.RJLocal.Projects)
+			rjInfo.RJLocal.Projects = pruneLocal(rjInfo.RJGlobal.Projects, rjInfo.RJLocal.Projects)
 
 			update = true
 		} else {
@@ -938,7 +1011,7 @@ func main() {
 
 	if args.syncronizeLocal {
 		if args.selectProject == "" {
-			for _, rjProject := range rjInfo.RJConfig.Projects {
+			for _, rjProject := range rjInfo.RJGlobal.Projects {
 				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
 					if rjLocalProject.Path != "" {
 						if newlySynced, err := syncronizeLocal(rjProject, rjLocalProject); err == nil {
@@ -962,8 +1035,8 @@ func main() {
 				}
 			}
 		} else {
-			if index := getProjectIndex(args.selectProject, rjInfo.RJConfig.Projects); index != -1 {
-				rjProject := rjInfo.RJConfig.Projects[index]
+			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
+				rjProject := rjInfo.RJGlobal.Projects[index]
 				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
 					if rjLocalProject.Path != "" {
 						if newlySynced, err := syncronizeLocal(rjProject, rjLocalProject); err != nil {
@@ -993,12 +1066,12 @@ func main() {
 
 	if args.clone {
 		if args.selectProject == "" {
-			for _, rjProject := range rjInfo.RJConfig.Projects {
+			for _, rjProject := range rjInfo.RJGlobal.Projects {
 				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
 					if rjLocalProject.Path != "" {
 						if _, err := getLocalProjectCommit(rjLocalProject.Path); err == nil {
 							if args.force {
-								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err != nil {
+								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
 									fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
 								} else {
 									fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
@@ -1008,7 +1081,7 @@ func main() {
 							}
 						} else {
 							if err == git.ErrRepositoryNotExists {
-								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err != nil {
+								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
 									fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
 								} else {
 									fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
@@ -1025,13 +1098,13 @@ func main() {
 				}
 			}
 		} else {
-			if index := getProjectIndex(args.selectProject, rjInfo.RJConfig.Projects); index != -1 {
-				rjProject := rjInfo.RJConfig.Projects[index]
+			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
+				rjProject := rjInfo.RJGlobal.Projects[index]
 				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
 					if rjLocalProject.Path != "" {
 						if _, err := getLocalProjectCommit(rjLocalProject.Path); err == nil {
 							if args.force {
-								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err != nil {
+								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
 									fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
 								} else {
 									fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
@@ -1041,7 +1114,7 @@ func main() {
 							}
 						} else {
 							if err == git.ErrRepositoryNotExists {
-								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err != nil {
+								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
 									fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
 								} else {
 									fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
