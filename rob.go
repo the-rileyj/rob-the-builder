@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	git "gopkg.in/src-d/go-git.v4"
@@ -46,7 +47,9 @@ type RJGlobal struct {
 
 // RJLocalProject is for storing local information about a given project, not committed
 type RJLocalProject struct {
-	Path, LastBuildHash string
+	Path            string // Used when building from local
+	LastBuildCommit string // Used when building from remote
+	LastBuildHash   string // Used when building from local
 }
 
 // RJProject is for storing global information about a given project, committed
@@ -381,9 +384,11 @@ func getProjectIndex(identifier string, projects []RJProject) int {
 
 func generateID() string {
 	var buffer bytes.Buffer
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+
 	buffer.WriteRune('r')
 	for index := 0; index < 9; index++ {
-		buffer.WriteString(fmt.Sprintf("%d", rand.Int()%10))
+		buffer.WriteString(fmt.Sprintf("%d", rnd.Int()%10))
 	}
 	buffer.WriteRune('j')
 	return buffer.String()
@@ -727,21 +732,22 @@ func printProject(project RJProject, localProjects RJLocal) {
 	fmt.Printf("%s\n", strings.Repeat("=", len(project.Name)))
 }
 
-func pruneLocal(projects []RJProject, localProjects map[string]RJLocalProject) map[string]RJLocalProject {
+func pruneLocal(rjInfo *RJInfo) int {
 	configProjects := make(map[string]bool)
-	for _, project := range projects {
+	pruned := 0
+
+	for _, project := range rjInfo.RJGlobal.Projects {
 		configProjects[project.ID] = true
 	}
 
-	returnProjects := make(map[string]RJLocalProject)
-
-	for projectID := range localProjects {
-		if configProjects[projectID] {
-			returnProjects[projectID] = localProjects[projectID]
+	for projectID := range rjInfo.RJLocal.Projects {
+		if !configProjects[projectID] {
+			delete(rjInfo.RJLocal.Projects, projectID)
+			pruned++
 		}
 	}
 
-	return returnProjects
+	return pruned
 }
 
 func removeContents(directoryPath string) error {
@@ -850,6 +856,207 @@ func writeUpdate(projectRootPath string, rjInfo RJInfo) error {
 	return nil
 }
 
+func rjBuild(rjInfo *RJInfo, rjProject *RJProject, args *arguments) bool {
+	if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
+		if rjLocalProject.LastBuildHash != "" {
+			if dontBuild := checkProjectBuildHash(rjLocalProject.LastBuildHash, rjLocalProject.Path); !dontBuild || args.force {
+				if dontBuild {
+					fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, build is being forced.", rjProject.Name)
+				} else {
+					fmt.Printf("Build hash for Project '%s' is different from the previous build hash, rebuilding.", rjProject.Name)
+				}
+
+				newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath)
+
+				if err == nil {
+					fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
+					rjLocalProject.LastBuildHash = newBuildHash
+					rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
+					return true
+				}
+
+				fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
+			} else {
+				fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, building skipped; to force building, specify the '-force' flag.\n", rjProject.Name)
+			}
+		} else {
+			fmt.Printf("Project '%s' does not have previous build hash, building now.\n", rjProject.Name)
+
+			newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath)
+
+			if err == nil {
+				fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
+				rjLocalProject.LastBuildHash = newBuildHash
+				rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
+				return true
+			}
+
+			fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
+		}
+	} else {
+		fmt.Printf("Project '%s' does not exist locally, building in container.\n", rjProject.Name)
+
+		if remoteCommit, err := getRemoteProjectCommit(rjProject.URL); err == nil {
+			if rjLocalProjectExists && rjLocalProject.LastBuildCommit != "" {
+				if remoteCommit != rjLocalProject.LastBuildCommit {
+					if err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL); err == nil {
+						fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
+						rjLocalProject.LastBuildCommit = remoteCommit
+						rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
+						return true
+					}
+					fmt.Println(errors.Wrapf(err, "problem building Project '%s' remotely", rjProject.Name))
+				} else {
+					if args.force {
+						fmt.Printf("Remote hash for Project '%s' is the same as the previous build's remote commit hash, build is being forced.", rjProject.Name)
+
+						err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL)
+
+						if err == nil {
+							fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
+							rjLocalProject.LastBuildCommit = remoteCommit
+							rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
+							return true
+						}
+
+						fmt.Println(errors.Wrapf(err, "problem building Project '%s' remotely", rjProject.Name))
+					} else {
+						fmt.Printf("Remote hash for Project '%s' is the same as the previous build's remote commit hash, building skipped; to force building, specify the '-force' flag.\n", rjProject.Name)
+					}
+				}
+			} else {
+				if err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL); err == nil {
+					fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
+					rjInfo.RJLocal.Projects[rjProject.ID] = RJLocalProject{LastBuildCommit: remoteCommit}
+					return true
+				}
+				fmt.Println(errors.Wrapf(err, "problem building Project '%s' remotely", rjProject.Name))
+			}
+		} else {
+			fmt.Println(errors.Wrapf(err, "problem getting the remote hash for Project '%s'", rjProject.Name))
+		}
+	}
+	return false
+}
+
+func handleCloneProject(rjProject *RJProject, rjLocal *RJLocal, force bool) {
+	if rjLocalProject, rjLocalProjectExists := rjLocal.Projects[rjProject.ID]; rjLocalProjectExists {
+		if rjLocalProject.Path != "" {
+			if _, err := getLocalProjectCommit(rjLocalProject.Path); err == nil {
+				if force {
+					if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
+						fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
+					} else {
+						fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
+					}
+				} else {
+					fmt.Printf("Could not clone project '%s' because it already exists, please specify '-force' if you wish to overwrite.\n", rjProject.Name)
+				}
+			} else {
+				if err == git.ErrRepositoryNotExists {
+					if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
+						fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
+					} else {
+						fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
+					}
+				} else {
+					fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
+				}
+			}
+		} else {
+			fmt.Printf("Project '%s' needs a local path before it can be cloned.\n", rjProject.Name)
+		}
+	} else {
+		fmt.Printf("Project '%s' does not exist locally.", rjProject.Name)
+	}
+}
+
+func handleSyncronizeLocal(rjProject *RJProject, rjLocal *RJLocal) {
+	if rjLocalProject, rjLocalProjectExists := rjLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
+		if rjLocalProject.Path != "" {
+			if newlySynced, err := syncronizeLocal(*rjProject, rjLocalProject); err == nil {
+				if err != nil {
+					fmt.Println(errors.Wrapf(err, "Could not syncronize project '%s'", rjProject.Name))
+				} else {
+					if newlySynced {
+						fmt.Printf("Project '%s' has been synced.", rjProject.Name)
+					} else {
+						fmt.Printf("Project '%s' is already in sync.", rjProject.Name)
+					}
+				}
+			} else {
+				fmt.Println(errors.Wrapf(err, "problem syncing Project '%s'", rjProject.Name))
+			}
+		} else {
+			fmt.Printf("Project '%s' needs a local path before it can be synced.\n", rjProject.Name)
+		}
+	} else {
+		fmt.Printf("Project '%s' does not exist locally.", rjProject.Name)
+	}
+}
+
+func rjDiscover(rjInfo *RJInfo, args *arguments) bool {
+	if len(rjInfo.RJLocal.SearchPaths) != 0 {
+		discoveredTagPaths := make([]string, 0)
+
+		for _, searchPath := range rjInfo.RJLocal.SearchPaths {
+			discoveredTagPaths = append(discoveredTagPaths, fileSearcher(".RJtag", searchPath, -1)...)
+		}
+
+		fmt.Printf("Found %d Projects\n", len(discoveredTagPaths))
+
+		errs, forced, found := 0, 0, 0
+
+		for _, discoveredTagPath := range discoveredTagPaths {
+			if id, err := ioutil.ReadFile(discoveredTagPath); err != nil {
+				fmt.Println(errors.Wrapf(err, "could not get id from tag at %s", discoveredTagPath))
+				errs++
+			} else {
+				_, localProjectExists := rjInfo.RJLocal.Projects[string(id)]
+				if !localProjectExists {
+					rjInfo.RJLocal.Projects[string(id)] = RJLocalProject{Path: filepath.Dir(discoveredTagPath)}
+					found++
+				} else if args.force {
+					rjInfo.RJLocal.Projects[string(id)] = RJLocalProject{Path: filepath.Dir(discoveredTagPath)}
+					forced++
+				}
+			}
+		}
+
+		pruned := pruneLocal(rjInfo)
+
+		desc := "kept"
+		result := found - pruned
+
+		if args.force {
+			desc = "forced"
+			result = forced - pruned
+		}
+
+		if result < 0 {
+			result = 0
+		}
+
+		fmt.Printf("%d Projects found and %s, %d pruned, and %d had errors occur reading the tags.\n", result, desc, pruned, errs)
+
+		return true
+	}
+	fmt.Println("Cannot discover if the list of paths to search in is empty (RJlocal.SearchPaths).")
+	return false
+}
+
+func rjPrune(rjInfo *RJInfo) bool {
+	pruned := pruneLocal(rjInfo)
+
+	if pruned == 0 {
+		fmt.Println("No Local Projects Pruned.")
+	} else {
+		fmt.Printf("%d Local Projects Pruned.\n", pruned)
+		return true
+	}
+	return false
+}
+
 func main() {
 	var rjInfo RJInfo
 	var update bool
@@ -955,6 +1162,21 @@ func main() {
 				} else {
 					rjInfo.RJLocal.SearchPaths = paths
 					update = true
+				}
+			} else {
+				for _, rjProject := range rjInfo.RJGlobal.Projects {
+					updated := 0
+					if _, rjLocalExists := rjInfo.RJLocal.Projects[rjProject.ID]; !rjLocalExists {
+						rjInfo.RJLocal.Projects[rjProject.ID] = RJLocalProject{}
+						updated++
+					}
+
+					if updated != 0 {
+						fmt.Printf("%d Projects updated from RJglobal to RJlocal!", updated)
+						update = true
+					} else {
+						fmt.Println("Local Projects already in sync with global Projects.")
+					}
 				}
 			}
 		} else if args.add {
@@ -1107,44 +1329,49 @@ func main() {
 				}
 			}
 		} else if args.add {
-			if args.updateSearchPath != "" || args.updateLocalPath != "" {
+			// Handles cases where a local command is meant to be executed but the '-l' flag is neglected
+			if args.updateSearchPath != "" || (args.selectProject == "" && args.updateLocalPath != "") {
 				fmt.Println("Don't forget to add the '-l' flag if you want to adjust the local search path or update the local path of a project.")
 			} else {
-				if !checkProjectExistance(args.selectProject, rjInfo.RJGlobal.Projects) {
-					if _, err := url.ParseRequestURI(args.selectProject); err == nil {
-						projectID := generateID()
+				if args.selectProject != "" {
+					if !checkProjectExistance(args.selectProject, rjInfo.RJGlobal.Projects) {
+						if _, err := url.ParseRequestURI(args.selectProject); err == nil {
+							projectID := generateID()
 
-						rjProject := RJProject{
-							ID:       projectID,
-							Name:     path.Base(args.selectProject),
-							SitePath: path.Join("./projects/", path.Base(args.selectProject)),
-							URL:      args.selectProject,
-						}
-
-						os.MkdirAll(rjProject.SitePath, os.ModePerm)
-
-						rjProject.Description, err = getProjectDescription(rjProject.Name, rjInfo.token)
-
-						if err != nil {
-							fmt.Println("Could not fetch description, defaulting to blank.")
-							rjProject.Description = ""
-						}
-
-						rjInfo.RJGlobal.Projects = append(rjInfo.RJGlobal.Projects, rjProject)
-						rjInfo.RJLocal.Projects[projectID] = RJLocalProject{Path: args.updateLocalPath}
-
-						if args.updateLocalPath != "" {
-							if err = writeRjTag(projectID, args.updateLocalPath); err != nil {
-								fmt.Println(errors.Wrap(err, "problem automatically writing to the .RJtag file in the new project's local path"))
+							rjProject := RJProject{
+								ID:       projectID,
+								Name:     path.Base(args.selectProject),
+								SitePath: path.Join("./projects/", path.Base(args.selectProject)),
+								URL:      args.selectProject,
 							}
-						}
 
-						update = true
+							os.MkdirAll(rjProject.SitePath, os.ModePerm)
+
+							rjProject.Description, err = getProjectDescription(rjProject.Name, rjInfo.token)
+
+							if err != nil {
+								fmt.Println("Could not fetch description, defaulting to blank.")
+								rjProject.Description = ""
+							}
+
+							rjInfo.RJGlobal.Projects = append(rjInfo.RJGlobal.Projects, rjProject)
+							rjInfo.RJLocal.Projects[projectID] = RJLocalProject{Path: args.updateLocalPath}
+
+							if args.updateLocalPath != "" {
+								if err = writeRjTag(projectID, args.updateLocalPath); err != nil {
+									fmt.Println(errors.Wrap(err, "problem automatically writing to the .RJtag file in the new project's local path"))
+								}
+							}
+
+							update = true
+						} else {
+							fmt.Println("Project URL is not valid.")
+						}
 					} else {
-						fmt.Println("Project URL is not valid.")
+						fmt.Println("Project with that URL already exists.")
 					}
 				} else {
-					fmt.Println("Project with that URL already exists.")
+					fmt.Println("Cannot add a Project when there is no URL specified.")
 				}
 			}
 		} else if args.remove {
@@ -1165,6 +1392,7 @@ func main() {
 					}
 				} else {
 					rjInfo.RJGlobal.Projects = append(rjInfo.RJGlobal.Projects[:index], rjInfo.RJGlobal.Projects[index+1:]...)
+					pruneLocal(&rjInfo)
 
 					fmt.Printf("Deleted Project %s\n", projectName)
 					update = true
@@ -1176,93 +1404,23 @@ func main() {
 	}
 
 	if args.prune {
-		localProjectsBefore := len(rjInfo.RJLocal.Projects)
-		rjInfo.RJLocal.Projects = pruneLocal(rjInfo.RJGlobal.Projects, rjInfo.RJLocal.Projects)
-		localProjectsAfter := len(rjInfo.RJLocal.Projects)
-
-		if localProjectsAfter == localProjectsBefore {
-			fmt.Println("No Local Projects Pruned.")
-		} else {
-			fmt.Printf("%d Local Projects Pruned.\n", localProjectsBefore-localProjectsAfter)
-			update = true
-		}
+		update = rjPrune(&rjInfo)
 	}
 
 	if args.discover {
-		if len(rjInfo.RJLocal.SearchPaths) != 0 {
-			discoveredTagPaths := make([]string, 0)
-
-			for _, searchPath := range rjInfo.RJLocal.SearchPaths {
-				discoveredTagPaths = append(discoveredTagPaths, fileSearcher(".RJtag", searchPath, -1)...)
-			}
-
-			fmt.Printf("Found %d Projects\n", len(discoveredTagPaths))
-
-			for _, discoveredTagPath := range discoveredTagPaths {
-				if id, err := ioutil.ReadFile(discoveredTagPath); err != nil {
-					fmt.Println(errors.Wrapf(err, "could not get id from tag at %s", discoveredTagPath))
-				} else {
-					rjInfo.RJLocal.Projects[string(id)] = RJLocalProject{Path: filepath.Dir(discoveredTagPath)}
-				}
-			}
-
-			rjInfo.RJLocal.Projects = pruneLocal(rjInfo.RJGlobal.Projects, rjInfo.RJLocal.Projects)
-
-			update = true
-		} else {
-			fmt.Println("Cannot discover if the list of paths to search in is empty (RJlocal.SearchPaths).")
-		}
+		update = rjDiscover(&rjInfo, &args)
 	}
 
 	if args.syncronizeLocal {
 		if args.selectProject == "" {
 			for _, rjProject := range rjInfo.RJGlobal.Projects {
-				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
-					if rjLocalProject.Path != "" {
-						if newlySynced, err := syncronizeLocal(rjProject, rjLocalProject); err == nil {
-							if err != nil {
-								fmt.Println(errors.Wrapf(err, "Could not syncronize project '%s'", rjProject.Name))
-							} else {
-								if newlySynced {
-									fmt.Printf("Project '%s' has been synced.", rjProject.Name)
-								} else {
-									fmt.Printf("Project '%s' is already in sync.", rjProject.Name)
-								}
-							}
-						} else {
-							fmt.Println(errors.Wrapf(err, "problem syncing Project '%s'", rjProject.Name))
-						}
-					} else {
-						fmt.Printf("Project '%s' needs a local path before it can be synced.\n", rjProject.Name)
-					}
-				} else {
-					fmt.Printf("Project '%s' does not exist locally.", rjProject.Name)
-				}
+				handleSyncronizeLocal(&rjProject, &rjInfo.RJLocal)
 			}
 		} else {
 			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
 				rjProject := rjInfo.RJGlobal.Projects[index]
-				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
-					if rjLocalProject.Path != "" {
-						if newlySynced, err := syncronizeLocal(rjProject, rjLocalProject); err != nil {
-							if err != nil {
-								fmt.Println(errors.Wrapf(err, "Could not syncronize project '%s'", rjProject.Name))
-							} else {
-								if newlySynced {
-									fmt.Printf("Project '%s' has been synced.", rjProject.Name)
-								} else {
-									fmt.Printf("Project '%s' is already in sync.", rjProject.Name)
-								}
-							}
-						} else {
-							fmt.Println(errors.Wrapf(err, "problem syncing Project '%s'", rjProject.Name))
-						}
-					} else {
-						fmt.Printf("Project '%s' needs a local path before it can be synced.\n", rjProject.Name)
-					}
-				} else {
-					fmt.Printf("Project '%s' does not exist locally.", rjProject.Name)
-				}
+
+				handleSyncronizeLocal(&rjProject, &rjInfo.RJLocal)
 			} else {
 				fmt.Println("Project specified does not exist.")
 			}
@@ -1272,68 +1430,12 @@ func main() {
 	if args.clone {
 		if args.selectProject == "" {
 			for _, rjProject := range rjInfo.RJGlobal.Projects {
-				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists {
-					if rjLocalProject.Path != "" {
-						if _, err := getLocalProjectCommit(rjLocalProject.Path); err == nil {
-							if args.force {
-								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
-									fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
-								} else {
-									fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
-								}
-							} else {
-								fmt.Printf("Could not clone project '%s' because it already exists, please specify '-force' if you wish to overwrite.\n", rjProject.Name)
-							}
-						} else {
-							if err == git.ErrRepositoryNotExists {
-								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
-									fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
-								} else {
-									fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
-								}
-							} else {
-								fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
-							}
-						}
-					} else {
-						fmt.Printf("Project '%s' needs a local path before it can be cloned.\n", rjProject.Name)
-					}
-				} else {
-					fmt.Printf("Project '%s' does not exist locally.", rjProject.Name)
-				}
+				handleCloneProject(&rjProject, &rjInfo.RJLocal, args.force)
 			}
 		} else {
 			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
 				rjProject := rjInfo.RJGlobal.Projects[index]
-				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists {
-					if rjLocalProject.Path != "" {
-						if _, err := getLocalProjectCommit(rjLocalProject.Path); err == nil {
-							if args.force {
-								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
-									fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
-								} else {
-									fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
-								}
-							} else {
-								fmt.Printf("Could not clone project '%s' because it already exists, please specify '-force' if you wish to overwrite.\n", rjProject.Name)
-							}
-						} else {
-							if err == git.ErrRepositoryNotExists {
-								if err := cloneProject(rjLocalProject.Path, rjProject.URL); err == nil {
-									fmt.Printf("Project '%s' has been successfully cloned to %s.", rjProject.Name, rjLocalProject.Path)
-								} else {
-									fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
-								}
-							} else {
-								fmt.Println(errors.Wrapf(err, "problem cloning Project '%s'", rjProject.Name))
-							}
-						}
-					} else {
-						fmt.Printf("Project '%s' needs a local path before it can be cloned.\n", rjProject.Name)
-					}
-				} else {
-					fmt.Printf("Project '%s' does not exist locally.", rjProject.Name)
-				}
+				handleCloneProject(&rjProject, &rjInfo.RJLocal, args.force)
 			} else {
 				fmt.Println("Project specified does not exist.")
 			}
@@ -1343,88 +1445,13 @@ func main() {
 	if args.build {
 		if args.selectProject == "" {
 			for _, rjProject := range rjInfo.RJGlobal.Projects {
-				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
-					if rjLocalProject.LastBuildHash != "" {
-						if dontBuild := checkProjectBuildHash(rjLocalProject.LastBuildHash, rjLocalProject.Path); !dontBuild || args.force {
-							if dontBuild {
-								fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, build is being forced.", rjProject.Name)
-							} else {
-								fmt.Printf("Build hash for Project '%s' is different from the previous build hash, rebuilding.", rjProject.Name)
-							}
-
-							if newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath); err == nil {
-								fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
-								rjLocalProject.LastBuildHash = newBuildHash
-								rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
-								update = true
-							} else {
-								fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
-							}
-						} else {
-							fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, building skipped; to force building, specify the '-force' flag.\n", rjProject.Name)
-						}
-					} else {
-						fmt.Printf("Project '%s' does not have previous build hash, building now.\n", rjProject.Name)
-						if newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath); err == nil {
-							fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
-							rjLocalProject.LastBuildHash = newBuildHash
-							rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
-							update = true
-						} else {
-							fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
-						}
-					}
-				} else {
-					fmt.Printf("Project '%s' does not exist locally, building in container.\n", rjProject.Name)
-					if err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL); err == nil {
-						fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
-					} else {
-						fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
-					}
+				if rjBuild(&rjInfo, &rjProject, &args) {
+					update = true
 				}
 			}
 		} else {
 			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
-				rjProject := rjInfo.RJGlobal.Projects[index]
-				if rjLocalProject, rjLocalProjectExists := rjInfo.RJLocal.Projects[rjProject.ID]; rjLocalProjectExists && rjLocalProject.Path != "" {
-					if rjLocalProject.LastBuildHash != "" {
-						if dontBuild := checkProjectBuildHash(rjLocalProject.LastBuildHash, rjLocalProject.Path); !dontBuild || args.force {
-							if dontBuild {
-								fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, build is being forced.", rjProject.Name)
-							} else {
-								fmt.Printf("Build hash for Project '%s' is different from the previous build hash, rebuilding.", rjProject.Name)
-							}
-
-							if newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath); err == nil {
-								fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
-								rjLocalProject.LastBuildHash = newBuildHash
-								rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
-								update = true
-							} else {
-								fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
-							}
-						} else {
-							fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, building skipped; to force building, specify the '-force' flag.\n", rjProject.Name)
-						}
-					} else {
-						fmt.Printf("Project '%s' does not have previous build hash, building now.\n", rjProject.Name)
-						if newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath); err == nil {
-							fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
-							rjLocalProject.LastBuildHash = newBuildHash
-							rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
-							update = true
-						} else {
-							fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
-						}
-					}
-				} else {
-					fmt.Printf("Project '%s' does not exist locally, building in container.\n", rjProject.Name)
-					if err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL); err == nil {
-						fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
-					} else {
-						fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
-					}
-				}
+				update = rjBuild(&rjInfo, &rjInfo.RJGlobal.Projects[index], &args)
 			} else {
 				fmt.Println("Project specified does not exist.")
 			}
