@@ -33,3 +33,21 @@ WORKDIR /app
 RUN npm install
 
 ENTRYPOINT ["npm", "run", "build"]`
+
+const rootBuild string = `
+FROM golang:alpine
+
+ARG BUILD_NAME
+ARG GOARCH
+ARG GOOS
+
+WORKDIR /app
+
+ADD *.go .
+
+RUN mkdir out
+RUN apk update && apk upgrade && apk add --no-cache gcc git musl-dev
+RUN go get -d ./...
+RUN env CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} \
+	go build --ldflags '-extldflags "-static"' \
+	-o ./out/${BUILD_NAME}`

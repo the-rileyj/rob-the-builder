@@ -13,7 +13,7 @@ Using ROB in a project typically goes like this:
 
 1. **Initalize RJglobal.json file**
 
-   You're going to want an ```RJglobal.json``` file in the root of the project you're going to be building the *React* projects to, the ```RJglobal.json``` file will keep track of the projects and their information.
+   You need an ```RJglobal.json``` file in the root of the project you're going to be building the *React* projects to, the ```RJglobal.json``` file will keep track of the projects and their information.
 
    ```bash
    rj:~/RJsite$ rob -init

@@ -42,9 +42,10 @@ type RJInfo struct {
 	token string
 }
 
-// RJGlobal is for storing global information about projects, committed
+// RJGlobal is for storing global information about projects and the project root URL, committed
 type RJGlobal struct {
 	Projects []RJProject `json:"projects"`
+	URL      string      `json:"url"`
 }
 
 // RJLocalProject is for storing local information about a given project, not committed
@@ -63,15 +64,16 @@ type RJProject struct {
 	URL         string `json:"url"`
 }
 
-// RJLocal is for storing local information about projects and where to start searching for local projects, not committed
+// RJLocal is for storing local information about projects, the last commit hash of the webserver, and where to start searching for local projects, not committed
 type RJLocal struct {
-	Projects    map[string]RJLocalProject `json:"projects"`
-	SearchPaths []string                  `json:"searchPaths"`
+	Projects              map[string]RJLocalProject `json:"projects"`
+	SearchPaths           []string                  `json:"searchPaths"`
+	LastRemoteHashOnBuild string                    `json:"lastRemoteHashOnBuild"`
 }
 
 type arguments struct {
-	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                  string
-	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, list, local, prune, syncronizeLocal, remove, update, updateDescription bool
+	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                        string
+	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, list, local, prune, syncronizeLocal, remove, root, update, updateDescription bool
 }
 
 type githubToken struct {
@@ -188,9 +190,6 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 
 	cmd.Stdout = os.Stdout
 
-	// ADJUSTTT
-	// cmd.SysProcAttr = &syscall.SysProcAttr{Token: syscall.TOKEN_ALL_ACCESS}
-
 	killChannel := make(chan os.Signal, 1)
 
 	signal.Notify(killChannel,
@@ -200,16 +199,11 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 		syscall.SIGQUIT,
 	)
 
-	go func() {
-		signal := <-killChannel
-		if signal.String() == "RJ" {
-			return
-		}
-		cmd.Process.Kill()
-	}()
+	go manageProcessReaping(cmd, killChannel)
 
 	err = cmd.Run()
 
+	// Indicates that 'manageProcessReaping' can exit
 	killChannel <- RJSignal{}
 
 	if err != nil {
@@ -225,17 +219,10 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 
 	cmd = exec.Command("docker", runBuildArgs...)
 
-	// cmd.SysProcAttr = &syscall.SysProcAttr{Token: syscall.PROCESS_TERMINATE}
-
 	cmd.Stdout = os.Stdout
 
-	go func() {
-		signal := <-killChannel
-		if signal.String() == "RJ" {
-			return
-		}
-		cmd.Process.Kill()
-	}()
+	// Indicates that 'manageProcessReaping' can exit
+	go manageProcessReaping(cmd, killChannel)
 
 	err = cmd.Run()
 
@@ -243,11 +230,82 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 
 	close(killChannel)
 
-	if err != nil {
-		return "", err
+	return newHash, err
+}
+
+func buildRoot(projectRoot string) error {
+	// absRoot, err := filepath.Abs(rootPath)
+
+	// if err != nil {
+	// 	return "", err
+	// }
+
+	buildName, goArch, goOS := "RJserver", runtime.GOARCH, runtime.GOOS
+
+	if goOS == "windows" {
+		buildName += ".exe"
 	}
 
-	return newHash, nil
+	// Equivalent to "build -t rj-root-build:latest --build-arg GOOS=windows --build-arg GOARCH=amd64 --build-arg BUILD_NAME=rjtest -f -""
+	runRootBuildArgs := []string{
+		"build", "-t", "rj-root-build:latest",
+		"--build-arg", fmt.Sprintf("BUILD_NAME=%s", buildName),
+		"--build-arg", fmt.Sprintf("GOARCH=%s", goArch),
+		"--build-arg", fmt.Sprintf("GOOS=%s", goOS),
+		"-f", "-", projectRoot,
+	}
+
+	cmd := exec.Command("docker", runRootBuildArgs...)
+
+	cmd.Stdin = bytes.NewBufferString(rootBuild)
+
+	cmd.Stdout = os.Stdout
+
+	killChannel := make(chan os.Signal, 1)
+
+	signal.Notify(killChannel,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
+
+	go manageProcessReaping(cmd, killChannel)
+
+	err := cmd.Run()
+
+	// Indicates that 'manageProcessReaping' can exit
+	killChannel <- RJSignal{}
+
+	if err != nil {
+		return err
+	}
+
+	//Equivalent to "run --rm -it rj-root-build:latest cat /app/out/{build name}"
+	runRootTransferArgs := []string{
+		"run", "-it", "--rm", "rj-root-build:latest", "echo", "wow",
+	}
+
+	cmd = exec.Command("docker", runRootTransferArgs...)
+
+	// rjServer, err := os.Create(buildName)
+
+	// if err != nil {
+	// 	return err
+	// }
+
+	cmd.Stdout = os.Stdout
+
+	// Indicates that 'manageProcessReaping' can exit
+	go manageProcessReaping(cmd, killChannel)
+
+	err = cmd.Run()
+
+	killChannel <- RJSignal{}
+
+	close(killChannel)
+
+	return err
 }
 
 // Checks the old build hash against the current hash of the directly; the output hash is not always consistant,
@@ -607,7 +665,7 @@ func initializeLocal(projectRoot string, rjGlobal RJGlobal, force bool) (RJLocal
 		printAndExit(err)
 	}
 
-	rjLocal := RJLocal{make(map[string]RJLocalProject), make([]string, 0)}
+	rjLocal := RJLocal{Projects: make(map[string]RJLocalProject), SearchPaths: make([]string, 0)}
 
 	for _, rjProject := range rjGlobal.Projects {
 		rjLocal.Projects[rjProject.ID] = RJLocalProject{}
@@ -647,6 +705,21 @@ func localProjectSynced(localProjectPath, projectURL, projectName string) (bool,
 	return localProjectHash == remoteProjectHash, nil
 }
 
+// Given that the 'killChannel' channel has already been created and registered with signal.Notify,
+// this will handle killing the created process in the case this program is ended via CTRL+C
+func manageProcessReaping(command *exec.Cmd, killChannel chan os.Signal) {
+	signal := <-killChannel
+	if signal.String() == "RJ" {
+		return
+	}
+
+	if runtime.GOOS == "windows" {
+		exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprint(command.Process.Pid)).Run()
+	} else {
+		command.Process.Kill()
+	}
+}
+
 func parseArguments() arguments {
 	var args arguments
 	flag.StringVar(&args.tokenFilePath, "t", "./token.json", "Name of the json file in the project root with the gitlab token for gathering the project descriptions, or the token directly.")
@@ -665,9 +738,10 @@ func parseArguments() arguments {
 	flag.BoolVar(&args.initialize, "init", false, "Initialize a new RJglobal file if not already created. Can be forced.")
 	flag.BoolVar(&args.initializeLocal, "init-local", false, "Initialize a new RJglobal file if not already created. Can be forced.")
 	flag.BoolVar(&args.flightCheck, "flight", false, "Prints the output of the 'pre-flight check'.")
-	flag.BoolVar(&args.local, "l", false, "Modifies the behaviour of some commands to only have affects on the RJlocal config.")
+	flag.BoolVar(&args.local, "l", false, "Modifies the behaviour of some commands to only have effects on the RJlocal config.")
 	flag.BoolVar(&args.list, "ls", false, "Lists the details of the project specified by 'project', or all projects if none are specified or found, as pretty printed JSON.")
 	flag.BoolVar(&args.prune, "prune", false, "Deletes all local projects not found in RJglobal.")
+	flag.BoolVar(&args.root, "root", false, "Modifies the behavior of some commands to effect the root project.")
 	flag.BoolVar(&args.syncronizeLocal, "sync", false, "Checks the local git hash against what's in the remote repo and updates either the local project specified by 'project' or all local projects if 'project' is not specified.")
 	flag.BoolVar(&args.remove, "rm", false, "Removes the project specified by 'project', adding the 'local' flag will only delete it locally..")
 	flag.BoolVar(&args.update, "up", false, "Updates the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.")
@@ -982,6 +1056,32 @@ func rjBuild(rjInfo *RJInfo, rjProject *RJProject, args *arguments) bool {
 		} else {
 			fmt.Println(errors.Wrapf(err, "problem getting the remote hash for Project '%s'", rjProject.Name))
 		}
+	}
+	return false
+}
+
+func handleBuildRoot(rjInfo *RJInfo, args *arguments) bool {
+	if _, err := os.Stat(args.projectRoot); err == nil {
+		if localHash, err := getLocalProjectCommit(args.projectRoot); err == nil {
+			if localHash != rjInfo.RJLocal.LastRemoteHashOnBuild || args.force {
+				if remoteHash, err := getRemoteProjectCommit(rjInfo.RJGlobal.URL); err == nil && remoteHash != localHash {
+					fmt.Println("Local project is not synced with remote, make sure to push/pull as needed.")
+				}
+
+				if err = buildRoot(args.projectRoot); err == nil {
+					rjInfo.RJLocal.LastRemoteHashOnBuild = localHash
+					return true
+				}
+
+				fmt.Println(err)
+			} else {
+				fmt.Println("Skipping building root project because the last build hash matches the local commit hash, please specify '-force' if you wish to override.")
+			}
+		} else {
+			fmt.Println(errors.Wrap(err, "problem fetching remote commit hash for root project"))
+		}
+	} else {
+		fmt.Println(errors.Wrap(err, "path to project root does not exist"))
 	}
 	return false
 }
@@ -1490,17 +1590,22 @@ func main() {
 	}
 
 	if args.build {
-		if args.selectProject == "" {
-			for _, rjProject := range rjInfo.RJGlobal.Projects {
-				if rjBuild(&rjInfo, &rjProject, &args) {
-					update = true
-				}
-			}
+		if args.root {
+			update = handleBuildRoot(&rjInfo, &args)
 		} else {
-			if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
-				update = rjBuild(&rjInfo, &rjInfo.RJGlobal.Projects[index], &args)
+			if args.selectProject == "" {
+				for _, rjProject := range rjInfo.RJGlobal.Projects {
+					if rjBuild(&rjInfo, &rjProject, &args) {
+						// Can't do update = rjBuild(...) because of possible false result
+						update = true
+					}
+				}
 			} else {
-				fmt.Println("Project specified does not exist.")
+				if index := getProjectIndex(args.selectProject, rjInfo.RJGlobal.Projects); index != -1 {
+					update = rjBuild(&rjInfo, &rjInfo.RJGlobal.Projects[index], &args)
+				} else {
+					fmt.Println("Project specified does not exist.")
+				}
 			}
 		}
 	}
