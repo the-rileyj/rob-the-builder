@@ -12,11 +12,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
@@ -75,6 +77,15 @@ type arguments struct {
 type githubToken struct {
 	Token string `json:"token"`
 }
+
+// Signal for sending success signal to processes, satisfies Signal interface
+type RJSignal struct{}
+
+func (rjs RJSignal) String() string {
+	return "RJ"
+}
+
+func (rjs RJSignal) Signal() {}
 
 //============================
 // Request Use Data Structures
@@ -177,7 +188,29 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 
 	cmd.Stdout = os.Stdout
 
+	// ADJUSTTT
+	// cmd.SysProcAttr = &syscall.SysProcAttr{Token: syscall.TOKEN_ALL_ACCESS}
+
+	killChannel := make(chan os.Signal, 1)
+
+	signal.Notify(killChannel,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
+
+	go func() {
+		signal := <-killChannel
+		if signal.String() == "RJ" {
+			return
+		}
+		cmd.Process.Kill()
+	}()
+
 	err = cmd.Run()
+
+	killChannel <- RJSignal{}
 
 	if err != nil {
 		return "", err
@@ -192,9 +225,23 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 
 	cmd = exec.Command("docker", runBuildArgs...)
 
+	// cmd.SysProcAttr = &syscall.SysProcAttr{Token: syscall.PROCESS_TERMINATE}
+
 	cmd.Stdout = os.Stdout
 
+	go func() {
+		signal := <-killChannel
+		if signal.String() == "RJ" {
+			return
+		}
+		cmd.Process.Kill()
+	}()
+
 	err = cmd.Run()
+
+	killChannel <- RJSignal{}
+
+	close(killChannel)
 
 	if err != nil {
 		return "", err

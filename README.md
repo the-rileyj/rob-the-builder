@@ -166,4 +166,4 @@ After that you're basically free to use the tool as you see fit; which just mean
         Updates the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.
 
 
-[public_repo_scope]: https://github.com/adam-p/markdown-here/raw/master/src/common/images/icon48.png "public_repo scope"
+[public_repo_scope]: https://github.com/the-rileyj/rob-the-builder/raw/master/repo_images/scopes.PNG "public_repo scope"
