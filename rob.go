@@ -12,13 +12,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
@@ -190,21 +188,22 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 
 	cmd.Stdout = os.Stdout
 
-	killChannel := make(chan os.Signal, 1)
+	// killChannel := make(chan os.Signal, 1)
+	// defer close(killChannel)
 
-	signal.Notify(killChannel,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT,
-	)
+	// signal.Notify(killChannel,
+	// 	syscall.SIGHUP,
+	// 	syscall.SIGINT,
+	// 	syscall.SIGTERM,
+	// 	syscall.SIGQUIT,
+	// )
 
-	go manageProcessReaping(cmd, killChannel)
+	// go manageProcessReaping(cmd, killChannel)
 
 	err = cmd.Run()
 
 	// Indicates that 'manageProcessReaping' can exit
-	killChannel <- RJSignal{}
+	// killChannel <- RJSignal{}
 
 	if err != nil {
 		return "", err
@@ -222,22 +221,20 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 	cmd.Stdout = os.Stdout
 
 	// Indicates that 'manageProcessReaping' can exit
-	go manageProcessReaping(cmd, killChannel)
+	// go manageProcessReaping(cmd, killChannel)
 
 	err = cmd.Run()
 
-	killChannel <- RJSignal{}
-
-	close(killChannel)
+	// killChannel <- RJSignal{}
 
 	return newHash, err
 }
 
-func buildRoot(projectRoot string) error {
+func buildRoot(rootPath string) error {
 	// absRoot, err := filepath.Abs(rootPath)
 
 	// if err != nil {
-	// 	return "", err
+	// 	return err
 	// }
 
 	buildName, goArch, goOS := "RJserver", runtime.GOARCH, runtime.GOOS
@@ -252,7 +249,7 @@ func buildRoot(projectRoot string) error {
 		"--build-arg", fmt.Sprintf("BUILD_NAME=%s", buildName),
 		"--build-arg", fmt.Sprintf("GOARCH=%s", goArch),
 		"--build-arg", fmt.Sprintf("GOOS=%s", goOS),
-		"-f", "-", projectRoot,
+		"-f", "-", rootPath,
 	}
 
 	cmd := exec.Command("docker", runRootBuildArgs...)
@@ -261,49 +258,65 @@ func buildRoot(projectRoot string) error {
 
 	cmd.Stdout = os.Stdout
 
-	killChannel := make(chan os.Signal, 1)
+	// killChannel := make(chan os.Signal, 1)
+	// defer close(killChannel)
 
-	signal.Notify(killChannel,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT,
-	)
+	// signal.Notify(killChannel,
+	// 	syscall.SIGHUP,
+	// 	syscall.SIGINT,
+	// 	syscall.SIGTERM,
+	// 	syscall.SIGQUIT,
+	// )
 
-	go manageProcessReaping(cmd, killChannel)
+	// go manageProcessReaping(cmd, killChannel)
 
 	err := cmd.Run()
 
 	// Indicates that 'manageProcessReaping' can exit
-	killChannel <- RJSignal{}
+	// killChannel <- RJSignal{}
 
 	if err != nil {
 		return err
 	}
 
-	//Equivalent to "run --rm -it rj-root-build:latest cat /app/out/{build name}"
+	// //Equivalent to "run --rm rj-root-build:latest cat /app/out/{build name}"
+	// runRootTransferArgs := []string{
+	// 	"run", "--rm",
+	// 	"-v", fmt.Sprintf(`%s:/app/dst`, filepath.Clean(absRoot)),
+	// 	"rj-root-build:latest",
+	// }
+
+	// cmd = exec.Command("docker", runRootTransferArgs...)
+
+	// // rjServer, err := os.Create(buildName)
+
+	// // if err != nil {
+	// // 	return err
+	// // }
+
+	// cmd.Stdout = os.Stdout
+
+	// // Indicates that 'manageProcessReaping' can exit
+	// // go manageProcessReaping(cmd, killChannel)
+
+	// err = cmd.Run()
+
+	// // killChannel <- RJSignal{}
+
+	// return err
+
+	//Equivalent to "run --rm rj-root-build:latest"
 	runRootTransferArgs := []string{
-		"run", "-it", "--rm", "rj-root-build:latest", "echo", "wow",
+		"run", "--rm", "rj-root-build:latest",
 	}
 
 	cmd = exec.Command("docker", runRootTransferArgs...)
 
-	// rjServer, err := os.Create(buildName)
+	f, _ := os.Create(buildName)
 
-	// if err != nil {
-	// 	return err
-	// }
-
-	cmd.Stdout = os.Stdout
-
-	// Indicates that 'manageProcessReaping' can exit
-	go manageProcessReaping(cmd, killChannel)
+	cmd.Stdout = f
 
 	err = cmd.Run()
-
-	killChannel <- RJSignal{}
-
-	close(killChannel)
 
 	return err
 }
@@ -713,10 +726,15 @@ func manageProcessReaping(command *exec.Cmd, killChannel chan os.Signal) {
 		return
 	}
 
-	if runtime.GOOS == "windows" {
-		exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprint(command.Process.Pid)).Run()
-	} else {
-		command.Process.Kill()
+	if command.Process != nil {
+		if runtime.GOOS == "windows" {
+			fmt.Println(command.Process.Pid)
+			subcommand := exec.Command("TASKKILL", "/T", "/F", "/PID", strconv.Itoa(command.Process.Pid))
+			subcommand.Stdout = os.Stdout
+			subcommand.Stderr = os.Stderr
+		} else {
+			command.Process.Kill()
+		}
 	}
 }
 
