@@ -12,11 +12,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
@@ -188,31 +190,39 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 
 	cmd.Stdout = os.Stdout
 
-	// killChannel := make(chan os.Signal, 1)
-	// defer close(killChannel)
+	killChannel := make(chan os.Signal, 1)
 
-	// signal.Notify(killChannel,
-	// 	syscall.SIGHUP,
-	// 	syscall.SIGINT,
-	// 	syscall.SIGTERM,
-	// 	syscall.SIGQUIT,
-	// )
+	signal.Notify(killChannel,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
 
-	// go manageProcessReaping(cmd, killChannel)
-
-	err = cmd.Run()
-
-	// Indicates that 'manageProcessReaping' can exit
-	// killChannel <- RJSignal{}
+	err = cmd.Start()
 
 	if err != nil {
 		return "", err
 	}
 
+	go manageProcessReaping(cmd, killChannel)
+
+	err = cmd.Wait()
+
+	// Indicates that 'manageProcessReaping' can exit
+	killChannel <- RJSignal{}
+
+	if err != nil {
+		return "", err
+	}
+
+	dockerBuildName := generateID()
+
 	// Equivalent to "run --rm -v "{local RJsite path}/{project site path}:/app/build" rj-react-build:latest"
 	runBuildArgs := []string{
 		"run", "--rm",
 		"-v", fmt.Sprintf(`%s:/app/build`, filepath.Clean(path.Join(absRoot, sitePath))),
+		"--name", dockerBuildName,
 		"rj-react-build:latest",
 	}
 
@@ -220,23 +230,23 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 
 	cmd.Stdout = os.Stdout
 
+	err = cmd.Start()
+
+	if err != nil {
+		return "", err
+	}
+
+	go manageBuildReaping(dockerBuildName, killChannel)
+
+	err = cmd.Wait()
+
 	// Indicates that 'manageProcessReaping' can exit
-	// go manageProcessReaping(cmd, killChannel)
-
-	err = cmd.Run()
-
-	// killChannel <- RJSignal{}
+	killChannel <- RJSignal{}
 
 	return newHash, err
 }
 
 func buildRoot(rootPath string) error {
-	// absRoot, err := filepath.Abs(rootPath)
-
-	// if err != nil {
-	// 	return err
-	// }
-
 	buildName, goArch, goOS := "RJserver", runtime.GOARCH, runtime.GOOS
 
 	if goOS == "windows" {
@@ -258,65 +268,61 @@ func buildRoot(rootPath string) error {
 
 	cmd.Stdout = os.Stdout
 
-	// killChannel := make(chan os.Signal, 1)
-	// defer close(killChannel)
+	killChannel := make(chan os.Signal, 1)
 
-	// signal.Notify(killChannel,
-	// 	syscall.SIGHUP,
-	// 	syscall.SIGINT,
-	// 	syscall.SIGTERM,
-	// 	syscall.SIGQUIT,
-	// )
+	signal.Notify(killChannel,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
 
-	// go manageProcessReaping(cmd, killChannel)
-
-	err := cmd.Run()
-
-	// Indicates that 'manageProcessReaping' can exit
-	// killChannel <- RJSignal{}
+	err := cmd.Start()
 
 	if err != nil {
 		return err
 	}
 
-	// //Equivalent to "run --rm rj-root-build:latest cat /app/out/{build name}"
-	// runRootTransferArgs := []string{
-	// 	"run", "--rm",
-	// 	"-v", fmt.Sprintf(`%s:/app/dst`, filepath.Clean(absRoot)),
-	// 	"rj-root-build:latest",
-	// }
+	go manageProcessReaping(cmd, killChannel)
 
-	// cmd = exec.Command("docker", runRootTransferArgs...)
+	err = cmd.Wait()
 
-	// // rjServer, err := os.Create(buildName)
+	// Indicates that 'manageProcessReaping' can exit
+	killChannel <- RJSignal{}
 
-	// // if err != nil {
-	// // 	return err
-	// // }
+	if err != nil {
+		return err
+	}
 
-	// cmd.Stdout = os.Stdout
-
-	// // Indicates that 'manageProcessReaping' can exit
-	// // go manageProcessReaping(cmd, killChannel)
-
-	// err = cmd.Run()
-
-	// // killChannel <- RJSignal{}
-
-	// return err
+	dockerBuildName := generateID()
 
 	//Equivalent to "run --rm rj-root-build:latest"
 	runRootTransferArgs := []string{
-		"run", "--rm", "rj-root-build:latest",
+		"run", "--rm", "--name", dockerBuildName, "rj-root-build:latest",
 	}
 
 	cmd = exec.Command("docker", runRootTransferArgs...)
 
-	f, _ := os.Create(buildName)
+	serverExecutable, err := os.Create(buildName)
 
-	cmd.Stdout = f
+	if err != nil {
+		return err
+	}
 
-	err = cmd.Run()
+	cmd.Stdout = serverExecutable
+
+	err = cmd.Start()
+
+	if err != nil {
+		return err
+	}
+
+	go manageBuildReaping(dockerBuildName, killChannel)
+
+	err = cmd.Wait()
+
+	// Indicates that 'manageProcessReaping' can exit
+	killChannel <- RJSignal{}
 
 	return err
 }
@@ -719,6 +725,20 @@ func localProjectSynced(localProjectPath, projectURL, projectName string) (bool,
 }
 
 // Given that the 'killChannel' channel has already been created and registered with signal.Notify,
+// this will handle killing a docker run command with a name matching the provided name param in
+// the case this program is ended via CTRL+C
+func manageBuildReaping(name string, killChannel chan os.Signal) {
+	signal := <-killChannel
+	if signal.String() == "RJ" {
+		return
+	}
+
+	if err := exec.Command("docker", "stop", name).Run(); err != nil {
+		fmt.Println(err)
+	}
+}
+
+// Given that the 'killChannel' channel has already been created and registered with signal.Notify,
 // this will handle killing the created process in the case this program is ended via CTRL+C
 func manageProcessReaping(command *exec.Cmd, killChannel chan os.Signal) {
 	signal := <-killChannel
@@ -728,10 +748,13 @@ func manageProcessReaping(command *exec.Cmd, killChannel chan os.Signal) {
 
 	if command.Process != nil {
 		if runtime.GOOS == "windows" {
-			fmt.Println(command.Process.Pid)
 			subcommand := exec.Command("TASKKILL", "/T", "/F", "/PID", strconv.Itoa(command.Process.Pid))
 			subcommand.Stdout = os.Stdout
 			subcommand.Stderr = os.Stderr
+			err := subcommand.Run()
+			if err != nil {
+				fmt.Println(err)
+			}
 		} else {
 			command.Process.Kill()
 		}
