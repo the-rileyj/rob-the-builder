@@ -73,8 +73,8 @@ type RJLocal struct {
 }
 
 type arguments struct {
-	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                             string
-	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, list, local, prune, syncronizeLocal, remove, run, root, update, updateDescription bool
+	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                                                     string
+	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, kill, list, local, prune, syncronizeLocal, remove, run, root, suicide, update, upgrade, updateDescription bool
 }
 
 type githubToken struct {
@@ -237,7 +237,7 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 		return "", err
 	}
 
-	go manageBuildReaping(dockerBuildName, killChannel)
+	go manageRunReaping(dockerBuildName, killChannel)
 
 	err = cmd.Wait()
 
@@ -318,7 +318,7 @@ func buildRoot(rootPath string) error {
 		return err
 	}
 
-	go manageBuildReaping(dockerBuildName, killChannel)
+	go manageRunReaping(dockerBuildName, killChannel)
 
 	err = cmd.Wait()
 
@@ -728,7 +728,7 @@ func localProjectSynced(localProjectPath, projectURL, projectName string) (bool,
 // Given that the 'killChannel' channel has already been created and registered with signal.Notify,
 // this will handle killing a docker run command with a name matching the provided name param in
 // the case this program is ended via CTRL+C
-func manageBuildReaping(name string, killChannel chan os.Signal) {
+func manageRunReaping(name string, killChannel chan os.Signal) {
 	signal := <-killChannel
 	if signal.String() == "RJ" {
 		return
@@ -776,18 +776,21 @@ func parseArguments() arguments {
 	flag.BoolVar(&args.clone, "clone", false, "Clones the local project specified by 'project' if it does not have a local hash or all local projects which do not have a local hash if 'project' is not specified; NOTE: this will clear the whole directory prior to cloning.")
 	flag.BoolVar(&args.updateDescription, "desc", false, "Used in conjuction with 'up', update the descriptions for the projects.")
 	flag.BoolVar(&args.discover, "discover", false, "Search for RJtag's correlating to the ID's of the projects in RJglobal, starting in 'SearchPath' specified in the RJlocal file.")
+	flag.BoolVar(&args.flightCheck, "flight", false, "Prints the output of the 'pre-flight check'.")
 	flag.BoolVar(&args.force, "force", false, "Force the operation(s); be careful.")
 	flag.BoolVar(&args.initialize, "init", false, "Initialize a new RJglobal file if not already created. Can be forced.")
 	flag.BoolVar(&args.initializeLocal, "init-local", false, "Initialize a new RJglobal file if not already created. Can be forced.")
-	flag.BoolVar(&args.flightCheck, "flight", false, "Prints the output of the 'pre-flight check'.")
+	flag.BoolVar(&args.kill, "kill", false, "Attempts to kill any running server instances.")
 	flag.BoolVar(&args.local, "l", false, "Modifies the behaviour of some commands to only have effects on the RJlocal config.")
 	flag.BoolVar(&args.list, "ls", false, "Lists the details of the project specified by 'project', or all projects if none are specified or found, as pretty printed JSON.")
 	flag.BoolVar(&args.prune, "prune", false, "Deletes all local projects not found in RJglobal.")
 	flag.BoolVar(&args.root, "root", false, "Modifies the behavior of some commands to effect the root project.")
 	flag.BoolVar(&args.run, "run", false, "Runs the webserver in the project root in management mode (Checks program return code, and checks for update on status code 9).")
 	flag.BoolVar(&args.syncronizeLocal, "sync", false, "Checks the local git hash against what's in the remote repo and updates either the local project specified by 'project' or all local projects if 'project' is not specified.")
+	flag.BoolVar(&args.suicide, "suicide", false, "Kills all running instances of self, except that which was invoked with '-suicide'.")
 	flag.BoolVar(&args.remove, "rm", false, "Removes the project specified by 'project', adding the 'local' flag will only delete it locally..")
 	flag.BoolVar(&args.update, "up", false, "Updates the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.")
+	flag.BoolVar(&args.upgrade, "upgrade", false, "Attempts to upgrade rob to the newest version.")
 
 	flag.Parse()
 
@@ -1199,9 +1202,23 @@ func handleCloneProject(rjProject *RJProject, rjLocal *RJLocal, force bool) {
 func handleProjectRun(rjInfo *RJInfo, args *arguments) {
 	var err error
 	var statusCode int
+
+	if !args.kill {
+		fmt.Println("Make sure you only have one server instance running, assure this with '-kill'.")
+	}
+
 	for statusCode == 0 || statusCode == 9 {
 		statusCode, err = runServer(args.projectRoot)
 		fmt.Println(statusCode, err)
+	}
+}
+
+func handleServerReaping() {
+	fmt.Println(os.Args)
+	if err := rjReapServer(); err != nil {
+		fmt.Println("Server not running.")
+	} else {
+		fmt.Println("Server killed.")
 	}
 }
 
@@ -1291,6 +1308,102 @@ func rjPrune(rjInfo *RJInfo) bool {
 	return false
 }
 
+func rjKillClones() {
+	installLocation := os.Args[0]
+
+	var command *exec.Cmd
+	if runtime.GOOS == "windows" {
+		command = exec.Command("TASKKILL", "/F", "/T", "/IM", filepath.Base(installLocation), "/FI", fmt.Sprintf("PID ne %d", os.Getpid()))
+	} else {
+		command = exec.Command("bash", "-c", fmt.Sprintf(`ps -aux | grep %s | awk '{if ($2 != %d) print $2}' | sudo xargs kill -9`, filepath.Base(installLocation), os.Getpid()))
+	}
+
+	command.Stdout = os.Stdout
+
+	fmt.Println(command.Run())
+}
+
+func rjReapServer() error {
+	var command *exec.Cmd
+	if runtime.GOOS == "windows" {
+		command = exec.Command("TASKKILL", "/F", "/T", "/IM", fmt.Sprintf("%s.exe", rjServer))
+	} else {
+		command = exec.Command("bash", "-c", fmt.Sprintf(`ps -aux | grep %s | awk '{print $2}' | sudo xargs kill -9`, rjServer))
+	}
+
+	command.Stdout = os.Stdout
+
+	err := command.Run()
+
+	return err
+}
+
+func rjUpdateSelf() error {
+	runRobPullArgs := []string{
+		"pull", "therileyjohnson/rob:linux-latest",
+	}
+
+	cmd := exec.Command("docker", runRobPullArgs...)
+
+	cmd.Stdout = os.Stdout
+
+	killChannel := make(chan os.Signal, 1)
+
+	signal.Notify(killChannel,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
+
+	err := cmd.Start()
+
+	if err != nil {
+		return err
+	}
+
+	go manageProcessReaping(cmd, killChannel)
+
+	err = cmd.Wait()
+
+	if err != nil {
+		return err
+	}
+
+	dockerRunName := generateID()
+	robName := filepath.Base(os.Args[0])
+
+	//Equivalent to "run --rm rj-root-build:latest"
+	runRobUpgradeArgs := []string{
+		"run", "--rm", "--name", dockerRunName, "rj-root-build:latest",
+	}
+
+	cmd = exec.Command("docker", runRobUpgradeArgs...)
+
+	serverExecutable, err := os.Create(robName)
+
+	if err != nil {
+		return err
+	}
+
+	cmd.Stdout = serverExecutable
+
+	err = cmd.Start()
+
+	if err != nil {
+		return err
+	}
+
+	go manageRunReaping(dockerRunName, killChannel)
+
+	err = cmd.Wait()
+
+	// Indicates that 'manageRunReaping' can exit
+	killChannel <- RJSignal{}
+
+	return err
+}
+
 func main() {
 	var rjInfo RJInfo
 	var update bool
@@ -1298,6 +1411,15 @@ func main() {
 	args := parseArguments()
 
 	rjGlobalExists, rjLocalExists, err := preFlightCheck(args.projectRoot)
+
+	if args.upgrade {
+		if runtime.GOOS != "linux" {
+			fmt.Println("Sorry, automatic upgrades are currently only supported on linux systems.")
+			os.Exit(1)
+		}
+		fmt.Println(rjUpdateSelf())
+		os.Exit(0)
+	}
 
 	if args.flightCheck {
 		fmt.Printf("RJglobal file exists: %v\nRJlocal file exists:  %v\n", rjGlobalExists, rjLocalExists)
@@ -1307,14 +1429,22 @@ func main() {
 		printAndExit(err)
 	}
 
+	if args.kill {
+		handleServerReaping()
+	}
+
+	if args.suicide {
+		rjKillClones()
+	}
+
 	if args.initialize {
 		// Initialize only if asked, will not be created automatically
 		rjInfo.RJGlobal, err = initializeGlobal(args.projectRoot, args.force)
 	} else if rjGlobalExists {
 		rjInfo.RJGlobal, err = getRjGlobal(args.projectRoot)
 	} else if !rjGlobalExists {
-		if !args.flightCheck {
-			fmt.Println("RJglobal must be initialized before executing any command besides 'flight' and 'init'.")
+		if !args.flightCheck && !args.suicide && !args.kill {
+			fmt.Println("RJglobal must be initialized before executing any command besides '-flight', '-init', '-kill', '-suicide', and '-upgrade'.")
 		}
 		os.Exit(0)
 	}
