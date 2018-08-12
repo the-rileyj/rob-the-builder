@@ -939,17 +939,23 @@ func removeContents(directoryPath string) error {
 }
 
 func runServer(projectRoot string) (int, error) {
+	absRoot, err := filepath.Abs(projectRoot)
+
+	if err != nil {
+		return 1, err
+	}
+
 	buildName := rjServer
 
 	if runtime.GOOS == "windows" {
 		buildName += ".exe"
 	}
 
-	cmd := exec.Command(path.Join(projectRoot, buildName))
+	cmd := exec.Command(path.Join(absRoot, buildName))
 
 	cmd.Stdout = os.Stdout
 
-	err := cmd.Start()
+	err = cmd.Start()
 
 	if err != nil {
 		return 1, err
