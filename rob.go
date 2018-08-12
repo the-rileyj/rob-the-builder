@@ -767,7 +767,7 @@ func parseArguments() arguments {
 	flag.StringVar(&args.tokenFilePath, "t", "./token.json", "Name of the json file in the project root with the gitlab token for gathering the project descriptions, or the token directly.")
 	flag.StringVar(&args.projectRoot, "rp", "./", "Path to the project root.")
 	flag.StringVar(&args.selectProject, "p", "", "Project selection for creating, reading, updating, and deleting; if creating this should be the Github URL of project you want to add.")
-	flag.StringVar(&args.selectProject, "pushat", "", "Builds the rob installer dockerfile and pushes it with the tag specified by '-pushat'.")
+	flag.StringVar(&args.pushat, "pushat", "", "Builds the rob installer dockerfile and pushes it with the tag specified by '-pushat'.")
 	flag.StringVar(&args.updateSearchPath, "sep", "", "The path where the auto discovery for directories with RJtag's should start searching. No-op if not used in conjunction with 'local' command line argument, as well as 'add', 'up', or 'rm'.")
 	flag.StringVar(&args.updateSitePath, "sip", "", "Path relative to the root of the rj website project, where the project should be output to when built. No-op if not used in conjunction with 'up' command line argument.")
 	flag.StringVar(&args.updateLocalPath, "lp", "", "Path on the machine, where the project should be built from. No-op if not used in conjunction with 'up' command line argument.")
