@@ -29,6 +29,7 @@ import (
 const (
 	reactLocalDockerfile  = "react-local-build.dockerfile"
 	reactRemoteDockerfile = "react-remote-build.dockerfile"
+	rjServer              = "RJserver"
 	rjURL                 = "https://therileyjohnson.com"
 )
 
@@ -72,8 +73,8 @@ type RJLocal struct {
 }
 
 type arguments struct {
-	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                        string
-	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, list, local, prune, syncronizeLocal, remove, root, update, updateDescription bool
+	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                             string
+	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, list, local, prune, syncronizeLocal, remove, run, root, update, updateDescription bool
 }
 
 type githubToken struct {
@@ -247,7 +248,7 @@ func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) 
 }
 
 func buildRoot(rootPath string) error {
-	buildName, goArch, goOS := "RJserver", runtime.GOARCH, runtime.GOOS
+	buildName, goArch, goOS := rjServer, runtime.GOARCH, runtime.GOOS
 
 	if goOS == "windows" {
 		buildName += ".exe"
@@ -783,6 +784,7 @@ func parseArguments() arguments {
 	flag.BoolVar(&args.list, "ls", false, "Lists the details of the project specified by 'project', or all projects if none are specified or found, as pretty printed JSON.")
 	flag.BoolVar(&args.prune, "prune", false, "Deletes all local projects not found in RJglobal.")
 	flag.BoolVar(&args.root, "root", false, "Modifies the behavior of some commands to effect the root project.")
+	flag.BoolVar(&args.run, "run", false, "Runs the webserver in the project root in management mode (Checks program return code, and checks for update on status code 9).")
 	flag.BoolVar(&args.syncronizeLocal, "sync", false, "Checks the local git hash against what's in the remote repo and updates either the local project specified by 'project' or all local projects if 'project' is not specified.")
 	flag.BoolVar(&args.remove, "rm", false, "Removes the project specified by 'project', adding the 'local' flag will only delete it locally..")
 	flag.BoolVar(&args.update, "up", false, "Updates the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.")
@@ -934,6 +936,35 @@ func removeContents(directoryPath string) error {
 	}
 
 	return nil
+}
+
+func runServer(projectRoot string) (int, error) {
+	buildName := rjServer
+
+	if runtime.GOOS == "windows" {
+		buildName += ".exe"
+	}
+
+	cmd := exec.Command(path.Join(projectRoot, buildName))
+
+	cmd.Stdout = os.Stdout
+
+	err := cmd.Start()
+
+	if err != nil {
+		return 1, err
+	}
+
+	err = cmd.Wait()
+
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			return exitError.Sys().(syscall.WaitStatus).ExitStatus(), err
+		}
+		return 1, err
+	}
+
+	return 0, err
 }
 
 func syncronizeLocal(project RJProject, localProject RJLocalProject) (bool, error) {
@@ -1156,6 +1187,15 @@ func handleCloneProject(rjProject *RJProject, rjLocal *RJLocal, force bool) {
 		}
 	} else {
 		fmt.Printf("Project '%s' does not exist locally.", rjProject.Name)
+	}
+}
+
+func handleProjectRun(rjInfo *RJInfo, args *arguments) {
+	var err error
+	var statusCode int
+	for statusCode == 0 || statusCode == 9 {
+		statusCode, err = runServer(args.projectRoot)
+		fmt.Println(statusCode, err)
 	}
 }
 
@@ -1649,6 +1689,10 @@ func main() {
 				}
 			}
 		}
+	}
+
+	if args.run {
+		handleProjectRun(&rjInfo, &args)
 	}
 
 	if update {
