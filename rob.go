@@ -73,7 +73,7 @@ type RJLocal struct {
 }
 
 type arguments struct {
-	selectProject, projectRoot, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                                                     string
+	selectProject, projectRoot, pushat, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                                             string
 	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, kill, list, local, prune, syncronizeLocal, remove, run, root, suicide, update, upgrade, updateDescription bool
 }
 
@@ -767,6 +767,7 @@ func parseArguments() arguments {
 	flag.StringVar(&args.tokenFilePath, "t", "./token.json", "Name of the json file in the project root with the gitlab token for gathering the project descriptions, or the token directly.")
 	flag.StringVar(&args.projectRoot, "rp", "./", "Path to the project root.")
 	flag.StringVar(&args.selectProject, "p", "", "Project selection for creating, reading, updating, and deleting; if creating this should be the Github URL of project you want to add.")
+	flag.StringVar(&args.selectProject, "pushat", "", "Builds the rob installer dockerfile and pushes it with the tag specified by '-pushat'.")
 	flag.StringVar(&args.updateSearchPath, "sep", "", "The path where the auto discovery for directories with RJtag's should start searching. No-op if not used in conjunction with 'local' command line argument, as well as 'add', 'up', or 'rm'.")
 	flag.StringVar(&args.updateSitePath, "sip", "", "Path relative to the root of the rj website project, where the project should be output to when built. No-op if not used in conjunction with 'up' command line argument.")
 	flag.StringVar(&args.updateLocalPath, "lp", "", "Path on the machine, where the project should be built from. No-op if not used in conjunction with 'up' command line argument.")
@@ -1323,6 +1324,72 @@ func rjKillClones() {
 	fmt.Println(command.Run())
 }
 
+func rjPushRob(tag string) error {
+	robLocation := filepath.Dir(os.Args[0])
+
+	// Equivalent to "build --no-cache -t {tag} -f - /path/to/rob"
+	runRobInstallerArgs := []string{
+		"build", "--no-cache", "-t", fmt.Sprintf("therileyjohnson/%s", tag),
+		"-f", "-", robLocation,
+	}
+
+	cmd := exec.Command("docker", runRobInstallerArgs...)
+
+	cmd.Stdin = bytes.NewBufferString(robInstaller)
+
+	cmd.Stdout = os.Stdout
+
+	killChannel := make(chan os.Signal, 1)
+
+	signal.Notify(killChannel,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
+
+	err := cmd.Start()
+
+	if err != nil {
+		return err
+	}
+
+	go manageProcessReaping(cmd, killChannel)
+
+	err = cmd.Wait()
+
+	// Indicates that 'manageProcessReaping' can exit
+	killChannel <- RJSignal{}
+
+	if err != nil {
+		return err
+	}
+
+	//Equivalent to "push therileyjohnson/{tag}"
+	runRobPushArgs := []string{
+		"push", fmt.Sprintf("therileyjohnson/%s", tag),
+	}
+
+	cmd = exec.Command("docker", runRobPushArgs...)
+
+	cmd.Stdout = os.Stdout
+
+	err = cmd.Start()
+
+	if err != nil {
+		return err
+	}
+
+	go manageProcessReaping(cmd, killChannel)
+
+	err = cmd.Wait()
+
+	// Indicates that 'manageProcessReaping' can exit
+	killChannel <- RJSignal{}
+
+	return err
+}
+
 func rjReapServer() error {
 	var command *exec.Cmd
 	if runtime.GOOS == "windows" {
@@ -1421,6 +1488,11 @@ func main() {
 		os.Exit(0)
 	}
 
+	if args.pushat != "" {
+		rjPushRob(args.pushat)
+		os.Exit(0)
+	}
+
 	if args.flightCheck {
 		fmt.Printf("RJglobal file exists: %v\nRJlocal file exists:  %v\n", rjGlobalExists, rjLocalExists)
 	}
@@ -1444,7 +1516,7 @@ func main() {
 		rjInfo.RJGlobal, err = getRjGlobal(args.projectRoot)
 	} else if !rjGlobalExists {
 		if !args.flightCheck && !args.suicide && !args.kill {
-			fmt.Println("RJglobal must be initialized before executing any command besides '-flight', '-init', '-kill', '-suicide', and '-upgrade'.")
+			fmt.Println("RJglobal must be initialized before executing any command besides '-flight', '-init', '-kill', '-pushat', '-suicide', and '-upgrade'.")
 		}
 		os.Exit(0)
 	}
