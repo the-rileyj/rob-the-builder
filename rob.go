@@ -1435,9 +1435,9 @@ func rjUpdateSelf() error {
 	dockerRunName := generateID()
 	robName := filepath.Base(os.Args[0])
 
-	//Equivalent to "run --rm rj-root-build:latest"
+	//Equivalent to "run --rm --name {id} rob:linux-latest"
 	runRobUpgradeArgs := []string{
-		"run", "--rm", "--name", dockerRunName, "rj-root-build:latest",
+		"run", "--rm", "--name", dockerRunName, "rob:linux-latest",
 	}
 
 	cmd = exec.Command("docker", runRobUpgradeArgs...)
