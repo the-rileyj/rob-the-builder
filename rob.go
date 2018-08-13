@@ -1215,12 +1215,7 @@ func handleProjectRun(rjInfo *RJInfo, args *arguments) {
 }
 
 func handleServerReaping() {
-	fmt.Println(os.Args)
-	if err := rjReapServer(); err != nil {
-		fmt.Println("Server not running.")
-	} else {
-		fmt.Println("Server killed.")
-	}
+	rjReapServer()
 }
 
 func handleSyncronizeLocal(rjProject *RJProject, rjLocal *RJLocal) {
@@ -1309,19 +1304,19 @@ func rjPrune(rjInfo *RJInfo) bool {
 	return false
 }
 
-func rjKillClones() {
-	installLocation := os.Args[0]
+func rjKillClones() error {
+	robLocation := os.Args[0]
 
 	var command *exec.Cmd
 	if runtime.GOOS == "windows" {
-		command = exec.Command("TASKKILL", "/F", "/T", "/IM", filepath.Base(installLocation), "/FI", fmt.Sprintf("PID ne %d", os.Getpid()))
+		command = exec.Command("TASKKILL", "/F", "/T", "/IM", filepath.Base(robLocation), "/FI", fmt.Sprintf("PID ne %d", os.Getpid()))
 	} else {
-		command = exec.Command("bash", "-c", fmt.Sprintf(`ps -aux | grep %s | awk '{if ($2 != %d) print $2}' | sudo xargs kill -9`, filepath.Base(installLocation), os.Getpid()))
+		command = exec.Command("bash", "-c", fmt.Sprintf(`ps -aux | grep %s | awk '{if ($2 != %d) print $2}' | sudo xargs kill -9`, filepath.Base(robLocation), os.Getpid()))
 	}
 
 	command.Stdout = os.Stdout
 
-	fmt.Println(command.Run())
+	return command.Run()
 }
 
 func rjPushRob(tag string) error {
