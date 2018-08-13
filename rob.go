@@ -1324,7 +1324,7 @@ func rjPushRob(tag string) error {
 
 	// Equivalent to "build --no-cache -t {tag} -f - /path/to/rob"
 	runRobInstallerArgs := []string{
-		"build", "--no-cache", "-t", fmt.Sprintf("therileyjohnson/%s", tag),
+		"build", "--no-cache", "-t", fmt.Sprintf("therileyjohnson/rob:%s", tag),
 		"-f", "-", robLocation,
 	}
 
@@ -1362,7 +1362,7 @@ func rjPushRob(tag string) error {
 
 	//Equivalent to "push therileyjohnson/{tag}"
 	runRobPushArgs := []string{
-		"push", fmt.Sprintf("therileyjohnson/%s", tag),
+		"push", fmt.Sprintf("therileyjohnson/rob:%s", tag),
 	}
 
 	cmd = exec.Command("docker", runRobPushArgs...)
