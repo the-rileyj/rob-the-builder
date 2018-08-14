@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -73,22 +74,88 @@ type RJLocal struct {
 }
 
 type arguments struct {
-	selectProject, projectRoot, pushat, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                                             string
 	add, build, clone, discover, flightCheck, force, initialize, initializeLocal, kill, list, local, prune, syncronizeLocal, remove, run, root, suicide, update, upgrade, updateDescription bool
+	spaces                                                                                                                                                                                  uint64
+	selectProject, mapDirectory, projectRoot, pushat, token, tokenFilePath, updateSearchPath, updateSitePath, updateLocalPath                                                               string
 }
 
 type githubToken struct {
 	Token string `json:"token"`
 }
 
+//===========================================================================
 // Signal for sending success signal to processes, satisfies Signal interface
+
+// RJSignal struct for indicating that shell process finished properly and the main process can stop listening for CTRL+C so it can kill that process */
 type RJSignal struct{}
 
 func (rjs RJSignal) String() string {
 	return "RJ"
 }
 
+// Signal satisfies the os.Signal interface
 func (rjs RJSignal) Signal() {}
+
+//===============================
+// For use in mapping directories
+
+type dirMap struct {
+	Dirs             []dirMap
+	Dir, DirName     string
+	FromRoot, Weight uint64
+}
+
+func (d dirMap) Len() int {
+	return len(d.Dirs)
+}
+
+func (d dirMap) Less(i, j int) bool {
+	return d.Dirs[i].Weight > d.Dirs[j].Weight
+}
+
+func (d dirMap) Swap(i, j int) {
+	d.Dirs[i], d.Dirs[j] = d.Dirs[j], d.Dirs[i]
+}
+
+func (d dirMap) String() string {
+	return d.StringyRoot(4)
+}
+
+func (d dirMap) Stringy(last bool, rootOffset, spaces uint64) string {
+	rString := strings.Builder{}
+	if last {
+		rString.WriteString(strings.Repeat(strings.Repeat(" ", int(spaces)), int((d.FromRoot - 1 - rootOffset))))
+		rString.WriteString("|\n")
+		rString.WriteString(strings.Repeat(strings.Repeat(" ", int(spaces)), int((d.FromRoot - 1 - rootOffset))))
+		rString.WriteString("o" + strings.Repeat("-", int(spaces)-1) + ">")
+	} else {
+		rString.WriteString(strings.Repeat("|"+strings.Repeat(" ", int(spaces)-1), int((d.FromRoot - rootOffset))))
+		rString.WriteString("\n")
+		rString.WriteString(strings.Repeat("|"+strings.Repeat(" ", int(spaces)-1), int((d.FromRoot - 1 - rootOffset))))
+		rString.WriteString("o" + strings.Repeat("-", int(spaces)-1) + ">")
+	}
+	rString.WriteString("/" + d.DirName)
+	rString.WriteString("\n")
+
+	for _, sd := range d.Dirs {
+		rString.WriteString(sd.Stringy(last, rootOffset, spaces))
+	}
+
+	return rString.String()
+}
+
+func (d dirMap) StringyRoot(spaces uint64) string {
+	rString := strings.Builder{}
+	rString.WriteString("+")
+	rString.WriteString(d.Dir)
+	rString.WriteString("\n")
+
+	for index, sd := range d.Dirs {
+		rString.WriteString(sd.Stringy(index == len(d.Dirs)-1, d.FromRoot, spaces))
+	}
+
+	return rString.String()
+}
 
 //============================
 // Request Use Data Structures
@@ -519,6 +586,35 @@ func generateID() string {
 	return buffer.String()
 }
 
+func getDirMap(rootDir, dirName string, fromRoot uint64) dirMap {
+	directory, err := os.Open(path.Join(rootDir, dirName))
+
+	if err != nil {
+		return dirMap{Dir: path.Join(rootDir, dirName), DirName: dirName, Dirs: make([]dirMap, 0), FromRoot: fromRoot, Weight: fromRoot}
+	}
+
+	foundPaths, err := directory.Readdir(-1)
+	directory.Close()
+
+	if err != nil {
+		return dirMap{Dir: path.Join(rootDir, dirName), DirName: dirName, Dirs: make([]dirMap, 0), FromRoot: fromRoot, Weight: fromRoot}
+	}
+
+	returnDirMap := dirMap{Dir: path.Join(rootDir, dirName), DirName: dirName, Dirs: make([]dirMap, 0), FromRoot: fromRoot, Weight: fromRoot}
+
+	for _, foundPath := range foundPaths {
+		if foundPath.IsDir() {
+			subDirMap := getDirMap(path.Join(rootDir, dirName), foundPath.Name(), fromRoot+1)
+			returnDirMap.Weight += subDirMap.Weight
+			returnDirMap.Dirs = append(returnDirMap.Dirs, subDirMap)
+		}
+	}
+
+	sort.Sort(returnDirMap)
+
+	return returnDirMap
+}
+
 func getGithubToken(path string) (string, error) {
 	file, err := os.Open(path)
 	defer file.Close()
@@ -762,16 +858,12 @@ func manageProcessReaping(command *exec.Cmd, killChannel chan os.Signal) {
 	}
 }
 
+func newDirMap(rootDir string) dirMap {
+	return getDirMap(filepath.Dir(rootDir), filepath.Base(rootDir), 0)
+}
+
 func parseArguments() arguments {
 	var args arguments
-	flag.StringVar(&args.tokenFilePath, "t", "./token.json", "Name of the json file in the project root with the gitlab token for gathering the project descriptions, or the token directly.")
-	flag.StringVar(&args.projectRoot, "rp", "./", "Path to the project root.")
-	flag.StringVar(&args.selectProject, "p", "", "Project selection for creating, reading, updating, and deleting; if creating this should be the Github URL of project you want to add.")
-	flag.StringVar(&args.pushat, "pushat", "", "Builds the rob installer dockerfile and pushes it with the tag specified by '-pushat'.")
-	flag.StringVar(&args.updateSearchPath, "sep", "", "The path where the auto discovery for directories with RJtag's should start searching. No-op if not used in conjunction with 'local' command line argument, as well as 'add', 'up', or 'rm'.")
-	flag.StringVar(&args.updateSitePath, "sip", "", "Path relative to the root of the rj website project, where the project should be output to when built. No-op if not used in conjunction with 'up' command line argument.")
-	flag.StringVar(&args.updateLocalPath, "lp", "", "Path on the machine, where the project should be built from. No-op if not used in conjunction with 'up' command line argument.")
-
 	flag.BoolVar(&args.add, "add", false, "Adds the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.")
 	flag.BoolVar(&args.build, "build", false, "Builds either the local project specified by 'project' or all local projects if 'project' is not specified; will check the last build hash prior to building and if they are the same then the project will only be rebuild if the '-force' flag is included.")
 	flag.BoolVar(&args.clone, "clone", false, "Clones the local project specified by 'project' if it does not have a local hash or all local projects which do not have a local hash if 'project' is not specified; NOTE: this will clear the whole directory prior to cloning.")
@@ -792,6 +884,17 @@ func parseArguments() arguments {
 	flag.BoolVar(&args.remove, "rm", false, "Removes the project specified by 'project', adding the 'local' flag will only delete it locally..")
 	flag.BoolVar(&args.update, "up", false, "Updates the project specified by 'project' with information provided via command line args 'description', site-path', and 'local-path'.")
 	flag.BoolVar(&args.upgrade, "upgrade", false, "Attempts to upgrade rob to the newest version.")
+
+	flag.Uint64Var(&args.spaces, "spaces", 4, "The number of spaces desired when printing something out.")
+
+	flag.StringVar(&args.mapDirectory, "map", "", "Path to map, specify indentation desired with '-spaces'.")
+	flag.StringVar(&args.updateLocalPath, "lp", "", "Path on the machine, where the project should be built from. No-op if not used in conjunction with 'up' command line argument.")
+	flag.StringVar(&args.selectProject, "p", "", "Project selection for creating, reading, updating, and deleting; if creating this should be the Github URL of project you want to add.")
+	flag.StringVar(&args.pushat, "pushat", "", "Builds the rob installer dockerfile and pushes it with the tag specified by '-pushat'.")
+	flag.StringVar(&args.projectRoot, "rp", "./", "Path to the project root.")
+	flag.StringVar(&args.updateSearchPath, "sep", "", "The path where the auto discovery for directories with RJtag's should start searching. No-op if not used in conjunction with 'local' command line argument, as well as 'add', 'up', or 'rm'.")
+	flag.StringVar(&args.updateSitePath, "sip", "", "Path relative to the root of the rj website project, where the project should be output to when built. No-op if not used in conjunction with 'up' command line argument.")
+	flag.StringVar(&args.tokenFilePath, "t", "./token.json", "Name of the json file in the project root with the gitlab token for gathering the project descriptions, or the token directly.")
 
 	flag.Parse()
 
@@ -1496,6 +1599,10 @@ func main() {
 		printAndExit(err)
 	}
 
+	if args.mapDirectory != "" {
+		fmt.Println(newDirMap(args.mapDirectory).StringyRoot(args.spaces))
+	}
+
 	if args.kill {
 		handleServerReaping()
 	}
@@ -1511,7 +1618,7 @@ func main() {
 		rjInfo.RJGlobal, err = getRjGlobal(args.projectRoot)
 	} else if !rjGlobalExists {
 		if !args.flightCheck && !args.suicide && !args.kill {
-			fmt.Println("RJglobal must be initialized before executing any command besides '-flight', '-init', '-kill', '-pushat', '-suicide', and '-upgrade'.")
+			fmt.Println("RJglobal must be initialized before executing any command besides '-flight', '-init', '-kill', '-map', '-pushat', '-suicide', and '-upgrade'.")
 		}
 		os.Exit(0)
 	}
