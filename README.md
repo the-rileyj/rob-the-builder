@@ -33,7 +33,7 @@ Using ROB in a project typically goes like this:
    A project is added via it's github URL, ***all** other information for the project is either derived from the github project URL or handled internally (ID generation). The project name comes from the URL (ex. https://github.com/the-rileyj/rj-internship-2018 would get the name rj-internship-2018), the site path (path relative to the root project (again, which is usually [RJ's site](https://github.com/the-rileyj/RJ-Go-Site-V2))) is automatically generated as `./projects/PROJECT_NAME`, and an ID is automatically generated.
 
    ```bash
-   rj:~/RJsite$ rob add "https://github.com/the-rileyj/rj-internship-2018"
+   rj:~/RJsite$ rob add project "https://github.com/the-rileyj/rj-internship-2018"
    ```
 
    The latter command will add the following information to the projects field of `RJglobal.json`:
@@ -57,13 +57,13 @@ Using ROB in a project typically goes like this:
    Adding token through command line:
 
    ```bash
-   rj:~/RJsite$ rob add https://github.com/the-rileyj/rj-internship-2018 -t "github PAC Token"
+   rj:~/RJsite$ rob add project https://github.com/the-rileyj/rj-internship-2018 -t "github PAC Token"
    ```
 
    Adding token via `*.json` file
 
    ```bash
-   rj:~/RJsite$ rob add https://github.com/the-rileyj/rj-internship-2018 -t "path/to/token/json/token.json" ...
+   rj:~/RJsite$ rob add project https://github.com/the-rileyj/rj-internship-2018 -t "path/to/token/json/token.json" ...
    ```
 
    Token JSON file schema:
