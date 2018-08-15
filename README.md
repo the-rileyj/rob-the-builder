@@ -40,11 +40,11 @@ Using ROB in a project typically goes like this:
 
    ```javascript
    {
-    "description": "React Spectacle Presentation on RJ's 2018 Summer Internship",
-    "id": "r011170886j",
-    "name": "rj-internship-2018",
-    "sitePath": "projects/rj-internship-2018",
-    "url": "https://github.com/the-rileyj/rj-internship-2018"
+    description: "React Spectacle Presentation on RJ's 2018 Summer Internship",
+    id: "r011170886j",
+    name: "rj-internship-2018",
+    sitePath: "projects/rj-internship-2018",
+    url: "https://github.com/the-rileyj/rj-internship-2018"
    }
    ```
 
