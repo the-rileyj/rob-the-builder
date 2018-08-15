@@ -38,7 +38,7 @@ Using ROB in a project typically goes like this:
 
    The latter command will add the following information to the projects field of `RJglobal.json`:
 
-   ```JSON
+   ```javascript
    {
     "description": "React Spectacle Presentation on RJ's 2018 Summer Internship",
     "id": "r011170886j",
@@ -68,7 +68,7 @@ Using ROB in a project typically goes like this:
 
    Token JSON file schema:
 
-   ```JSON
+   ```javascript
    {
     "token": "token string"
    }
@@ -80,7 +80,7 @@ Using ROB in a project typically goes like this:
 
    The command, in addition to the information added to `RJglobal.json` as shown above,  will add the following information to the projects object of `RJlocal.json`:
 
-   ```JSON
+   ```javascript
    {
     "projects": {
         "r011170886j": {
