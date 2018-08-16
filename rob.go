@@ -205,195 +205,195 @@ type devDependencies map[string]string
 
 type scripts map[string]string
 
-func buildProjectLocally(localPath, rootPath, sitePath string) (string, error) {
-	return buildProject(localPath, rootPath, sitePath, "", false)
-}
+// func buildProjectLocally(localPath, rootPath, sitePath string) (string, error) {
+// 	return buildProject(localPath, rootPath, sitePath, "", false)
+// }
 
-func buildProjectRemotely(rootPath, sitePath, githubURL string) error {
-	_, err := buildProject("", rootPath, sitePath, githubURL, true)
-	return err
-}
+// func buildProjectRemotely(rootPath, sitePath, githubURL string) error {
+// 	_, err := buildProject("", rootPath, sitePath, githubURL, true)
+// 	return err
+// }
 
-func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) (string, error) {
-	newHash := ""
+// func buildProject(localPath, rootPath, sitePath, githubURL string, remote bool) (string, error) {
+// 	newHash := ""
 
-	if !remote {
-		newHash = dasher(localPath, -1)
-	}
+// 	if !remote {
+// 		newHash = dasher(localPath, -1)
+// 	}
 
-	absRoot, err := filepath.Abs(rootPath)
+// 	absRoot, err := filepath.Abs(rootPath)
 
-	if err != nil {
-		return "", err
-	}
+// 	if err != nil {
+// 		return "", err
+// 	}
 
-	var imageBuildArgs []string
-	if remote {
-		// Equivalent to:
-		// docker build -t rjtest:latest \
-		// --build-arg GITHUB_DIR={Project Name} --build-arg GITHUB_URL={Project Github URL} \
-		// -f - {path to build context}
-		imageBuildArgs = []string{
-			"build", "-t", "rj-react-build:latest",
-			"--build-arg", fmt.Sprintf("GITHUB_DIR=%s", path.Base(githubURL)),
-			"--build-arg", fmt.Sprintf("GITHUB_URL=%s", githubURL),
-			"-f", "-", filepath.Clean(localPath),
-		}
-	} else {
-		// Equivalent to "docker build -t rj-react-build:latest -f - {path to build context}"
-		imageBuildArgs = []string{
-			"build", "-t", "rj-react-build:latest",
-			"-f", "-",
-			filepath.Clean(localPath),
-		}
-	}
+// 	var imageBuildArgs []string
+// 	if remote {
+// 		// Equivalent to:
+// 		// docker build -t rjtest:latest \
+// 		// --build-arg GITHUB_DIR={Project Name} --build-arg GITHUB_URL={Project Github URL} \
+// 		// -f - {path to build context}
+// 		imageBuildArgs = []string{
+// 			"build", "-t", "rj-react-build:latest",
+// 			"--build-arg", fmt.Sprintf("GITHUB_DIR=%s", path.Base(githubURL)),
+// 			"--build-arg", fmt.Sprintf("GITHUB_URL=%s", githubURL),
+// 			"-f", "-", filepath.Clean(localPath),
+// 		}
+// 	} else {
+// 		// Equivalent to "docker build -t rj-react-build:latest -f - {path to build context}"
+// 		imageBuildArgs = []string{
+// 			"build", "-t", "rj-react-build:latest",
+// 			"-f", "-",
+// 			filepath.Clean(localPath),
+// 		}
+// 	}
 
-	cmd := exec.Command("docker", imageBuildArgs...)
+// 	cmd := exec.Command("docker", imageBuildArgs...)
 
-	if remote {
-		cmd.Stdin = bytes.NewBufferString(remoteReactBuild)
-	} else {
-		cmd.Stdin = bytes.NewBufferString(localReactBuild)
-	}
+// 	if remote {
+// 		cmd.Stdin = bytes.NewBufferString(remoteReactBuild)
+// 	} else {
+// 		cmd.Stdin = bytes.NewBufferString(localReactBuild)
+// 	}
 
-	cmd.Stdout = os.Stdout
+// 	cmd.Stdout = os.Stdout
 
-	killChannel := make(chan os.Signal, 1)
+// 	killChannel := make(chan os.Signal, 1)
 
-	signal.Notify(killChannel,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT,
-	)
+// 	signal.Notify(killChannel,
+// 		syscall.SIGHUP,
+// 		syscall.SIGINT,
+// 		syscall.SIGTERM,
+// 		syscall.SIGQUIT,
+// 	)
 
-	err = cmd.Start()
+// 	err = cmd.Start()
 
-	if err != nil {
-		return "", err
-	}
+// 	if err != nil {
+// 		return "", err
+// 	}
 
-	go manageProcessReaping(cmd, killChannel)
+// 	go manageProcessReaping(cmd, killChannel)
 
-	err = cmd.Wait()
+// 	err = cmd.Wait()
 
-	// Indicates that 'manageProcessReaping' can exit
-	killChannel <- RJSignal{}
+// 	// Indicates that 'manageProcessReaping' can exit
+// 	killChannel <- RJSignal{}
 
-	if err != nil {
-		return "", err
-	}
+// 	if err != nil {
+// 		return "", err
+// 	}
 
-	dockerBuildName := generateID()
+// 	dockerBuildName := generateID()
 
-	// Equivalent to "run --rm -v "{local RJsite path}/{project site path}:/app/build" rj-react-build:latest"
-	runBuildArgs := []string{
-		"run", "--rm",
-		"-v", fmt.Sprintf(`%s:/app/build`, filepath.Clean(path.Join(absRoot, sitePath))),
-		"--name", dockerBuildName,
-		"rj-react-build:latest",
-	}
+// 	// Equivalent to "run --rm -v "{local RJsite path}/{project site path}:/app/build" rj-react-build:latest"
+// 	runBuildArgs := []string{
+// 		"run", "--rm",
+// 		"-v", fmt.Sprintf(`%s:/app/build`, filepath.Clean(path.Join(absRoot, sitePath))),
+// 		"--name", dockerBuildName,
+// 		"rj-react-build:latest",
+// 	}
 
-	cmd = exec.Command("docker", runBuildArgs...)
+// 	cmd = exec.Command("docker", runBuildArgs...)
 
-	cmd.Stdout = os.Stdout
+// 	cmd.Stdout = os.Stdout
 
-	err = cmd.Start()
+// 	err = cmd.Start()
 
-	if err != nil {
-		return "", err
-	}
+// 	if err != nil {
+// 		return "", err
+// 	}
 
-	go manageRunReaping(dockerBuildName, killChannel)
+// 	go manageRunReaping(dockerBuildName, killChannel)
 
-	err = cmd.Wait()
+// 	err = cmd.Wait()
 
-	// Indicates that 'manageProcessReaping' can exit
-	killChannel <- RJSignal{}
+// 	// Indicates that 'manageProcessReaping' can exit
+// 	killChannel <- RJSignal{}
 
-	return newHash, err
-}
+// 	return newHash, err
+// }
 
-func buildRoot(rootPath string) error {
-	buildName, goArch, goOS := rjServer, runtime.GOARCH, runtime.GOOS
+// func buildRoot(rootPath string) error {
+// 	buildName, goArch, goOS := rjServer, runtime.GOARCH, runtime.GOOS
 
-	if goOS == "windows" {
-		buildName += ".exe"
-	}
+// 	if goOS == "windows" {
+// 		buildName += ".exe"
+// 	}
 
-	// Equivalent to "build -t rj-root-build:latest --build-arg GOOS=windows --build-arg GOARCH=amd64 --build-arg BUILD_NAME=rjtest -f -""
-	runRootBuildArgs := []string{
-		"build", "-t", "rj-root-build:latest",
-		"--build-arg", fmt.Sprintf("BUILD_NAME=%s", buildName),
-		"--build-arg", fmt.Sprintf("GOARCH=%s", goArch),
-		"--build-arg", fmt.Sprintf("GOOS=%s", goOS),
-		"-f", "-", rootPath,
-	}
+// 	// Equivalent to "build -t rj-root-build:latest --build-arg GOOS=windows --build-arg GOARCH=amd64 --build-arg BUILD_NAME=rjtest -f -""
+// 	runRootBuildArgs := []string{
+// 		"build", "-t", "rj-root-build:latest",
+// 		"--build-arg", fmt.Sprintf("BUILD_NAME=%s", buildName),
+// 		"--build-arg", fmt.Sprintf("GOARCH=%s", goArch),
+// 		"--build-arg", fmt.Sprintf("GOOS=%s", goOS),
+// 		"-f", "-", rootPath,
+// 	}
 
-	cmd := exec.Command("docker", runRootBuildArgs...)
+// 	cmd := exec.Command("docker", runRootBuildArgs...)
 
-	cmd.Stdin = bytes.NewBufferString(rootBuild)
+// 	cmd.Stdin = bytes.NewBufferString(rootBuild)
 
-	cmd.Stdout = os.Stdout
+// 	cmd.Stdout = os.Stdout
 
-	killChannel := make(chan os.Signal, 1)
+// 	killChannel := make(chan os.Signal, 1)
 
-	signal.Notify(killChannel,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT,
-	)
+// 	signal.Notify(killChannel,
+// 		syscall.SIGHUP,
+// 		syscall.SIGINT,
+// 		syscall.SIGTERM,
+// 		syscall.SIGQUIT,
+// 	)
 
-	err := cmd.Start()
+// 	err := cmd.Start()
 
-	if err != nil {
-		return err
-	}
+// 	if err != nil {
+// 		return err
+// 	}
 
-	go manageProcessReaping(cmd, killChannel)
+// 	go manageProcessReaping(cmd, killChannel)
 
-	err = cmd.Wait()
+// 	err = cmd.Wait()
 
-	// Indicates that 'manageProcessReaping' can exit
-	killChannel <- RJSignal{}
+// 	// Indicates that 'manageProcessReaping' can exit
+// 	killChannel <- RJSignal{}
 
-	if err != nil {
-		return err
-	}
+// 	if err != nil {
+// 		return err
+// 	}
 
-	dockerBuildName := generateID()
+// 	dockerBuildName := generateID()
 
-	//Equivalent to "run --rm rj-root-build:latest"
-	runRootTransferArgs := []string{
-		"run", "--rm", "--name", dockerBuildName, "rj-root-build:latest",
-	}
+// 	//Equivalent to "run --rm rj-root-build:latest"
+// 	runRootTransferArgs := []string{
+// 		"run", "--rm", "--name", dockerBuildName, "rj-root-build:latest",
+// 	}
 
-	cmd = exec.Command("docker", runRootTransferArgs...)
+// 	cmd = exec.Command("docker", runRootTransferArgs...)
 
-	serverExecutable, err := os.Create(buildName)
+// 	serverExecutable, err := os.Create(buildName)
 
-	if err != nil {
-		return err
-	}
+// 	if err != nil {
+// 		return err
+// 	}
 
-	cmd.Stdout = serverExecutable
+// 	cmd.Stdout = serverExecutable
 
-	err = cmd.Start()
+// 	err = cmd.Start()
 
-	if err != nil {
-		return err
-	}
+// 	if err != nil {
+// 		return err
+// 	}
 
-	go manageRunReaping(dockerBuildName, killChannel)
+// 	go manageRunReaping(dockerBuildName, killChannel)
 
-	err = cmd.Wait()
+// 	err = cmd.Wait()
 
-	// Indicates that 'manageProcessReaping' can exit
-	killChannel <- RJSignal{}
+// 	// Indicates that 'manageProcessReaping' can exit
+// 	killChannel <- RJSignal{}
 
-	return err
-}
+// 	return err
+// }
 
 // Checks the old build hash against the current hash of the directly; the output hash is not always consistant,
 // so a hash is generated five times and compared against the old hash, returning true if any of the five match
@@ -1172,32 +1172,32 @@ func rjBuild(rjInfo *RJInfo, rjProject *RJProject, args *arguments) bool {
 					fmt.Printf("Build hash for Project '%s' is different from the previous build hash, rebuilding.", rjProject.Name)
 				}
 
-				newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath)
+				// newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath)
 
-				if err == nil {
-					fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
-					rjLocalProject.LastBuildHash = newBuildHash
-					rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
-					return true
-				}
+				// if err == nil {
+				// 	fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
+				// 	rjLocalProject.LastBuildHash = newBuildHash
+				// 	rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
+				// 	return true
+				// }
 
-				fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
+				// fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
 			} else {
 				fmt.Printf("Build hash for Project '%s' is the same as the previous build hash, building skipped; to force building, specify the '-force' flag.\n", rjProject.Name)
 			}
 		} else {
 			fmt.Printf("Project '%s' does not have previous build hash, building now.\n", rjProject.Name)
 
-			newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath)
+			// newBuildHash, err := buildProjectLocally(rjLocalProject.Path, args.projectRoot, rjProject.SitePath)
 
-			if err == nil {
-				fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
-				rjLocalProject.LastBuildHash = newBuildHash
-				rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
-				return true
-			}
+			// if err == nil {
+			// 	fmt.Printf("Project '%s' successfully built to sitepath '%s'.\n", rjProject.Name, rjProject.SitePath)
+			// 	rjLocalProject.LastBuildHash = newBuildHash
+			// 	rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
+			// 	return true
+			// }
 
-			fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
+			// fmt.Println(errors.Wrapf(err, "problem building Project '%s'", rjProject.Name))
 		}
 	} else {
 		fmt.Printf("Project '%s' does not exist locally, building in container.\n", rjProject.Name)
@@ -1205,18 +1205,18 @@ func rjBuild(rjInfo *RJInfo, rjProject *RJProject, args *arguments) bool {
 		if remoteCommit, err := getRemoteProjectCommit(rjProject.URL); err == nil {
 			if rjLocalProjectExists && rjLocalProject.LastBuildCommit != "" {
 				if remoteCommit != rjLocalProject.LastBuildCommit {
-					if err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL); err == nil {
-						fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
-						rjLocalProject.LastBuildCommit = remoteCommit
-						rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
-						return true
-					}
+					// if err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL); err == nil {
+					// 	fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
+					// 	rjLocalProject.LastBuildCommit = remoteCommit
+					// 	rjInfo.RJLocal.Projects[rjProject.ID] = rjLocalProject
+					// 	return true
+					// }
 					fmt.Println(errors.Wrapf(err, "problem building Project '%s' remotely", rjProject.Name))
 				} else {
 					if args.force {
 						fmt.Printf("Remote hash for Project '%s' is the same as the previous build's remote commit hash, build is being forced.", rjProject.Name)
 
-						err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL)
+						// err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL)
 
 						if err == nil {
 							fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
@@ -1231,11 +1231,11 @@ func rjBuild(rjInfo *RJInfo, rjProject *RJProject, args *arguments) bool {
 					}
 				}
 			} else {
-				if err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL); err == nil {
-					fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
-					rjInfo.RJLocal.Projects[rjProject.ID] = RJLocalProject{LastBuildCommit: remoteCommit}
-					return true
-				}
+				// if err = buildProjectRemotely(args.projectRoot, rjProject.SitePath, rjProject.URL); err == nil {
+				// 	fmt.Printf("Project '%s' has been successfully cloned to %s.\n", rjProject.Name, rjProject.SitePath)
+				// 	rjInfo.RJLocal.Projects[rjProject.ID] = RJLocalProject{LastBuildCommit: remoteCommit}
+				// 	return true
+				// }
 				fmt.Println(errors.Wrapf(err, "problem building Project '%s' remotely", rjProject.Name))
 			}
 		} else {
@@ -1245,31 +1245,31 @@ func rjBuild(rjInfo *RJInfo, rjProject *RJProject, args *arguments) bool {
 	return false
 }
 
-func handleBuildRoot(rjInfo *RJInfo, args *arguments) bool {
-	if _, err := os.Stat(args.projectRoot); err == nil {
-		if localHash, err := getLocalProjectCommit(args.projectRoot); err == nil {
-			if localHash != rjInfo.RJLocal.LastRemoteHashOnBuild || args.force {
-				if remoteHash, err := getRemoteProjectCommit(rjInfo.RJGlobal.URL); err == nil && remoteHash != localHash {
-					fmt.Println("Local project is not synced with remote, make sure to push/pull as needed.")
-				}
+// func handleBuildRoot(rjInfo *RJInfo, args *arguments) bool {
+// 	if _, err := os.Stat(args.projectRoot); err == nil {
+// 		if localHash, err := getLocalProjectCommit(args.projectRoot); err == nil {
+// 			if localHash != rjInfo.RJLocal.LastRemoteHashOnBuild || args.force {
+// 				if remoteHash, err := getRemoteProjectCommit(rjInfo.RJGlobal.URL); err == nil && remoteHash != localHash {
+// 					fmt.Println("Local project is not synced with remote, make sure to push/pull as needed.")
+// 				}
 
-				if err = buildRoot(args.projectRoot); err == nil {
-					rjInfo.RJLocal.LastRemoteHashOnBuild = localHash
-					return true
-				}
+// 				if err = buildRoot(args.projectRoot); err == nil {
+// 					rjInfo.RJLocal.LastRemoteHashOnBuild = localHash
+// 					return true
+// 				}
 
-				fmt.Println(err)
-			} else {
-				fmt.Println("Skipping building root project because the last build hash matches the local commit hash, please specify '-force' if you wish to override.")
-			}
-		} else {
-			fmt.Println(errors.Wrap(err, "problem fetching remote commit hash for root project"))
-		}
-	} else {
-		fmt.Println(errors.Wrap(err, "path to project root does not exist"))
-	}
-	return false
-}
+// 				fmt.Println(err)
+// 			} else {
+// 				fmt.Println("Skipping building root project because the last build hash matches the local commit hash, please specify '-force' if you wish to override.")
+// 			}
+// 		} else {
+// 			fmt.Println(errors.Wrap(err, "problem fetching remote commit hash for root project"))
+// 		}
+// 	} else {
+// 		fmt.Println(errors.Wrap(err, "path to project root does not exist"))
+// 	}
+// 	return false
+// }
 
 func handleCloneProject(rjProject *RJProject, rjLocal *RJLocal, force bool) {
 	if rjLocalProject, rjLocalProjectExists := rjLocal.Projects[rjProject.ID]; rjLocalProjectExists {
@@ -1422,71 +1422,71 @@ func rjKillClones() error {
 	return command.Run()
 }
 
-func rjPushRob(tag string) error {
-	robLocation := filepath.Dir(os.Args[0])
+// func rjPushRob(tag string) error {
+// 	robLocation := filepath.Dir(os.Args[0])
 
-	// Equivalent to "build --no-cache -t {tag} -f - /path/to/rob"
-	runRobInstallerArgs := []string{
-		"build", "--no-cache", "-t", fmt.Sprintf("therileyjohnson/rob:%s", tag),
-		"-f", "-", robLocation,
-	}
+// 	// Equivalent to "build --no-cache -t {tag} -f - /path/to/rob"
+// 	runRobInstallerArgs := []string{
+// 		"build", "--no-cache", "-t", fmt.Sprintf("therileyjohnson/rob:%s", tag),
+// 		"-f", "-", robLocation,
+// 	}
 
-	cmd := exec.Command("docker", runRobInstallerArgs...)
+// 	cmd := exec.Command("docker", runRobInstallerArgs...)
 
-	cmd.Stdin = bytes.NewBufferString(robInstaller)
+// 	cmd.Stdin = bytes.NewBufferString(robInstaller)
 
-	cmd.Stdout = os.Stdout
+// 	cmd.Stdout = os.Stdout
 
-	killChannel := make(chan os.Signal, 1)
+// 	killChannel := make(chan os.Signal, 1)
 
-	signal.Notify(killChannel,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT,
-	)
+// 	signal.Notify(killChannel,
+// 		syscall.SIGHUP,
+// 		syscall.SIGINT,
+// 		syscall.SIGTERM,
+// 		syscall.SIGQUIT,
+// 	)
 
-	err := cmd.Start()
+// 	err := cmd.Start()
 
-	if err != nil {
-		return err
-	}
+// 	if err != nil {
+// 		return err
+// 	}
 
-	go manageProcessReaping(cmd, killChannel)
+// 	go manageProcessReaping(cmd, killChannel)
 
-	err = cmd.Wait()
+// 	err = cmd.Wait()
 
-	// Indicates that 'manageProcessReaping' can exit
-	killChannel <- RJSignal{}
+// 	// Indicates that 'manageProcessReaping' can exit
+// 	killChannel <- RJSignal{}
 
-	if err != nil {
-		return err
-	}
+// 	if err != nil {
+// 		return err
+// 	}
 
-	//Equivalent to "push therileyjohnson/{tag}"
-	runRobPushArgs := []string{
-		"push", fmt.Sprintf("therileyjohnson/rob:%s", tag),
-	}
+// 	//Equivalent to "push therileyjohnson/{tag}"
+// 	runRobPushArgs := []string{
+// 		"push", fmt.Sprintf("therileyjohnson/rob:%s", tag),
+// 	}
 
-	cmd = exec.Command("docker", runRobPushArgs...)
+// 	cmd = exec.Command("docker", runRobPushArgs...)
 
-	cmd.Stdout = os.Stdout
+// 	cmd.Stdout = os.Stdout
 
-	err = cmd.Start()
+// 	err = cmd.Start()
 
-	if err != nil {
-		return err
-	}
+// 	if err != nil {
+// 		return err
+// 	}
 
-	go manageProcessReaping(cmd, killChannel)
+// 	go manageProcessReaping(cmd, killChannel)
 
-	err = cmd.Wait()
+// 	err = cmd.Wait()
 
-	// Indicates that 'manageProcessReaping' can exit
-	killChannel <- RJSignal{}
+// 	// Indicates that 'manageProcessReaping' can exit
+// 	killChannel <- RJSignal{}
 
-	return err
-}
+// 	return err
+// }
 
 func rjReapServer() error {
 	var command *exec.Cmd
@@ -1569,7 +1569,7 @@ func rjUpdateSelf() error {
 	return err
 }
 
-func main() {
+func oldMain() {
 	var rjInfo RJInfo
 	var update bool
 
@@ -1587,7 +1587,7 @@ func main() {
 	}
 
 	if args.pushat != "" {
-		rjPushRob(args.pushat)
+		// rjPushRob(args.pushat)
 		os.Exit(0)
 	}
 
@@ -1982,7 +1982,7 @@ func main() {
 
 	if args.build {
 		if args.root {
-			update = handleBuildRoot(&rjInfo, &args)
+			// update = handleBuildRoot(&rjInfo, &args)
 		} else {
 			if args.selectProject == "" {
 				for _, rjProject := range rjInfo.RJGlobal.Projects {

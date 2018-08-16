@@ -1,4 +1,4 @@
-package main
+package cmd
 
 const localReactBuild string = `
 FROM node:8.11.3-alpine
