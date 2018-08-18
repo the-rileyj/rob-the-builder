@@ -10,6 +10,10 @@ Build tool for React projects in RJ's site (Work In Progess)
 
 ROB is a tool used for tagging react projects which are included in some manner in [RJ's site](https://github.com/the-rileyj/RJ-Go-Site-V2). Though this project is pretty much solely for my personal use, instructions will still be provided because this project has gotten some attention (albeit minor) from people who are not me.
 
+## Usage Explantion
+
+ROB was born after doing some work on my back-end and realizing that integration with React SPA's was going to involve a lot of fanangling on my part. I would need to keep the versions of the web apps consistant on my website, but to do that would require a lot of manual building and rebuilding as new versions came to be. Cloning the web apps directly would leave a lot of files needed for cleanup on top of the aforementioned management. I didn't to create shell scripts individually for each project for building and cleanup. Thus ROB came to fruition to solve those issues, among others including building the web server within a container (removing the need to install Golang), managing automatic upgrades for the server on new commits, and overall serve as a tool for managing my server and assisting in local development of the web server.
+
 ## General Workflow
 
 Using ROB in a project typically goes like this:
