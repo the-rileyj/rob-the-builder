@@ -998,23 +998,13 @@ func rjBuild(rjInfo *RJInfo, rjProject RJProject, projectRoot string, force bool
 }
 
 func rjPushRob(tag string, local bool) error {
-	robLocation := filepath.Dir(os.Args[0])
-
-	robLocation, err := filepath.Abs(robLocation)
-
-	if err != nil {
-		return err
-	}
-
 	// Equivalent to "build --no-cache -t {tag} -f - /path/to/rob"
 	runRobInstallerArgs := []string{
 		"build", "--no-cache", "-t", fmt.Sprintf("therileyjohnson/rob:%s", tag),
-		"-f", "-", robLocation,
+		"-f", "-", ".",
 	}
 
 	cmd := exec.Command("docker", runRobInstallerArgs...)
-
-	cmd.Dir = robLocation
 
 	if local {
 		cmd.Stdin = bytes.NewBufferString(robInstallBuilderLocal)
@@ -1033,7 +1023,7 @@ func rjPushRob(tag string, local bool) error {
 		syscall.SIGQUIT,
 	)
 
-	err = cmd.Start()
+	err := cmd.Start()
 
 	if err != nil {
 		return err

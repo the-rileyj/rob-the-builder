@@ -15,8 +15,11 @@
 package cmd
 
 import (
-	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -24,8 +27,36 @@ import (
 var addSearchDirCmd = &cobra.Command{
 	Use:   "searchDir",
 	Short: "Adds a new search directory.",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("addSearchDir called")
+	RunE: func(cmd *cobra.Command, args []string) error {
+		searchDir := strings.TrimSpace(strings.Join(args, " "))
+
+		_, err := os.Stat(searchDir)
+
+		if err != nil {
+			return errors.New("local path to searchDir does not exist")
+		}
+
+		searchDir, err = filepath.Abs(searchDir)
+
+		if err != nil {
+			return errors.New("could not get absolute path to project")
+		}
+
+		rjInfo, err := getRjInfo(projectRootPath)
+
+		if err != nil {
+			return err
+		}
+
+		for _, searchPath := range rjInfo.RJLocal.SearchPaths {
+			if searchDir == searchPath {
+				return errors.New("search path already in search path list")
+			}
+		}
+
+		rjInfo.RJLocal.SearchPaths = append(rjInfo.RJLocal.SearchPaths, searchDir)
+
+		return writeUpdate(projectRootPath, *rjInfo)
 	},
 }
 

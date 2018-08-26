@@ -37,31 +37,31 @@ ENTRYPOINT ["npm", "run", "build"]`
 const robInstallBuilderLocal string = `
 FROM golang:1.10.3-alpine3.8
 
-WORKDIR /
+WORKDIR /go/src/github.com/the-rileyj/rob
 
-ADD . .
+ADD ./cmd ./cmd
+
+COPY main.go .
 
 RUN apk update && \
     apk upgrade && \
-    apk add --no-cache gcc git musl-dev && \
-    tar -xzf master.tar.gz -C ./ && \
-    mv ./rob-the-builder-master app && \
-    rm -rf master.tar.gz
+    apk add --no-cache gcc git musl-dev
 
-RUN cd app && \
-    go get -d ./... && \
+RUN go get -d ./... && \
     env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 	go build --ldflags '-extldflags "-static"' \
-	-o ../bin/rob && \
+	-o /bin/rob && \
     cd / && \
     ls | grep -v "^bin$\|dev\|etc\|home\|lib\|proc\|sys" | xargs rm -rf
+
+WORKDIR /
 
 ENTRYPOINT cat ./bin/rob`
 
 const robInstallBuilderRemote string = `
 FROM golang:1.10.3-alpine3.8
 
-WORKDIR /
+WORKDIR /go/src/github.com/the-rileyj
 
 ADD https://github.com/the-rileyj/rob-the-builder/archive/master.tar.gz ./
 
@@ -69,16 +69,18 @@ RUN apk update && \
     apk upgrade && \
     apk add --no-cache gcc git musl-dev && \
     tar -xzf master.tar.gz -C ./ && \
-    mv ./rob-the-builder-master app && \
+    mv ./rob-the-builder-master rob && \
     rm -rf master.tar.gz
 
-RUN cd app && \
+RUN cd rob && \
     go get -d ./... && \
     env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 	go build --ldflags '-extldflags "-static"' \
-	-o ../bin/rob && \
+	-o /bin/rob && \
     cd / && \
     ls | grep -v "^bin$\|dev\|etc\|home\|lib\|proc\|sys" | xargs rm -rf
+
+WORKDIR /
 
 ENTRYPOINT cat ./bin/rob`
 
