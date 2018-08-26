@@ -2,13 +2,13 @@ FROM golang:1.10.3-alpine3.8
 
 WORKDIR /go/src/github.com/the-rileyj/rob
 
-ADD ./cmd ./cmd
-
-COPY main.go .
-
 RUN apk update && \
     apk upgrade && \
     apk add --no-cache gcc git musl-dev
+
+ADD ./cmd ./cmd
+
+COPY main.go .
 
 RUN go get -d ./... && \
     env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
@@ -19,4 +19,4 @@ RUN go get -d ./... && \
 
 WORKDIR /
 
-ENTRYPOINT cat ./bin/rob`
+ENTRYPOINT cat ./bin/rob
