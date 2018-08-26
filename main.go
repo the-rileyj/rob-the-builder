@@ -14,7 +14,7 @@
 
 package main
 
-import "github.com/rob/cmd"
+import "github.com/the-rileyj/rob/cmd"
 
 func main() {
 	cmd.Execute()

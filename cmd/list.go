@@ -59,12 +59,13 @@ Filters for global and local can be specified.`,
 		project := strings.TrimSpace(strings.Join(args, " "))
 
 		if (global && local) || (!global && !local) {
-			if project == "" {
+			if project != "" {
 				index := getProjectIndex(project, rjInfo.RJGlobal.Projects)
 
 				if index == -1 {
 					return errors.New("project specified does not exist")
 				}
+
 				return printProject(rjInfo.RJGlobal.Projects[index], rjInfo.RJLocal, spaces)
 			}
 
@@ -78,7 +79,7 @@ Filters for global and local can be specified.`,
 
 			return rerr
 		} else if global {
-			if project == "" {
+			if project != "" {
 
 				index := getProjectIndex(project, rjInfo.RJGlobal.Projects)
 
@@ -86,20 +87,33 @@ Filters for global and local can be specified.`,
 					return errors.New("project specified does not exist")
 				}
 
-				fmt.Printf("%s\n", strings.Repeat("=", len(rjInfo.RJGlobal.Projects[index].Name)))
+				fmt.Printf("\n%s\n%s\n", rjInfo.RJGlobal.Projects[index].Name, strings.Repeat("=", len(rjInfo.RJGlobal.Projects[index].Name)))
 
 				err = prettyPrintStruct(rjInfo.RJGlobal.Projects[index], spaces)
 
-				fmt.Printf("%s\n", strings.Repeat("=", len(rjInfo.RJGlobal.Projects[index].Name)))
+				fmt.Printf("%s\n", strings.Repeat("_", len(rjInfo.RJGlobal.Projects[index].Name)))
 
 				return err
 			}
 
-			return prettyPrintStruct(rjInfo.RJGlobal, spaces)
+			var rerr error
+
+			for _, rjProject := range rjInfo.RJGlobal.Projects {
+				fmt.Printf("\n%s\n%s\n", rjProject.Name, strings.Repeat("=", len(rjProject.Name)))
+
+				if err = prettyPrintStruct(rjProject, spaces); err != nil {
+					cmd.Println(err)
+					rerr = err
+				}
+
+				fmt.Printf("%s\n", strings.Repeat("_", len(rjProject.Name)))
+			}
+
+			return rerr
 		}
 
 		// Local selected
-		if project == "" {
+		if project != "" {
 			index := getProjectIndex(project, rjInfo.RJGlobal.Projects)
 
 			if index == -1 {
@@ -112,7 +126,7 @@ Filters for global and local can be specified.`,
 				return errors.New("project specified does not exist locally")
 			}
 
-			fmt.Printf("%s\n", strings.Repeat("=", len(rjInfo.RJGlobal.Projects[index].Name)))
+			fmt.Printf("\n%s\n%s\n", rjInfo.RJGlobal.Projects[index].Name, strings.Repeat("=", len(rjInfo.RJGlobal.Projects[index].Name)))
 
 			err = prettyPrintStruct(localProject, spaces)
 
@@ -121,7 +135,26 @@ Filters for global and local can be specified.`,
 			return err
 		}
 
-		return prettyPrintStruct(rjInfo.RJLocal, spaces)
+		var rerr error
+
+		for _, rjProject := range rjInfo.RJGlobal.Projects {
+			fmt.Printf("\n%s\n%s\n", rjProject.Name, strings.Repeat("=", len(rjProject.Name)))
+
+			rjLocalProject, exists := rjInfo.RJLocal.Projects[rjProject.ID]
+
+			if exists {
+				if err = prettyPrintStruct(rjLocalProject, spaces); err != nil {
+					cmd.Println(err)
+					rerr = err
+				}
+			} else {
+				cmd.Println("Local project does not exist")
+			}
+
+			fmt.Printf("%s\n", strings.Repeat("_", len(rjProject.Name)))
+		}
+
+		return rerr
 	},
 }
 

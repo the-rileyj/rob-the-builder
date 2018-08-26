@@ -16,8 +16,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"path"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -57,30 +55,7 @@ to quickly create a Cobra application.`,
 		}
 
 		if local {
-			index := getProjectIndex(project, rjInfo.RJGlobal.Projects)
-
-			if index == -1 {
-				errors.New("project specified does not exist")
-			}
-
-			projectName := rjInfo.RJGlobal.Projects[index].Name
-			projectID := rjInfo.RJGlobal.Projects[index].ID
-
-			_, localProjectExists := rjInfo.RJLocal.Projects[projectID]
-
-			if !localProjectExists {
-				return fmt.Errorf("project %s does not exist locally", projectName)
-			}
-
-			err = os.Remove(path.Join(rjInfo.RJLocal.Projects[projectID].Path, ".RJtag"))
-
-			if err != nil {
-				return err
-			}
-
-			delete(rjInfo.RJLocal.Projects, projectID)
-			fmt.Printf("Deleted Project %s Locally.\n", projectName)
-
+			removeProjectLocally(project, rjInfo)
 			return writeUpdate(projectRootPath, *rjInfo)
 		}
 
@@ -93,16 +68,12 @@ to quickly create a Cobra application.`,
 
 		projectName := rjInfo.RJGlobal.Projects[index].Name
 
-		_, localProjectExists := rjInfo.RJLocal.Projects[rjInfo.RJGlobal.Projects[index].ID]
-
-		if localProjectExists {
-			delete(rjInfo.RJLocal.Projects, rjInfo.RJGlobal.Projects[index].ID)
-		}
-
 		rjInfo.RJGlobal.Projects = append(rjInfo.RJGlobal.Projects[:index], rjInfo.RJGlobal.Projects[index+1:]...)
+
+		// Pruning handles deleting project locally
 		pruneLocal(rjInfo)
 
-		fmt.Printf("Deleted Project %s Globally\n", projectName)
+		fmt.Printf("Deleted Project %s Globally and Locally\n", projectName)
 
 		return writeUpdate(projectRootPath, *rjInfo)
 	},

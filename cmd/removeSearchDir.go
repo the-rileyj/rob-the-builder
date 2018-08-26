@@ -15,29 +15,43 @@
 package cmd
 
 import (
-	"strings"
+	"strconv"
 
 	"github.com/spf13/cobra"
 )
 
-// pushCmd represents the push command
-var pushCmd = &cobra.Command{
-	Use:   "push",
-	Short: "Builds the rob installer dockerfile and pushes it with the tag specified.",
+// removeSearchDirCmd represents the removeSearchDir command
+var removeSearchDirCmd = &cobra.Command{
+	Use:   "searchDir",
+	Short: "Removes a search directory.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		local, err := cmd.Flags().GetBool("local")
+		rjInfo, err := getRjInfo(projectRootPath)
 
 		if err != nil {
 			return err
 		}
 
-		tag := strings.TrimSpace(strings.Join(args, " "))
+		var update bool
 
-		return rjPushRob(tag, local)
+		for _, parseString := range args {
+			index, err := strconv.ParseUint(parseString, 10, 64)
+
+			if err == nil {
+				if 0 <= int(index) || int(index) < len(rjInfo.RJLocal.SearchPaths) {
+					rjInfo.RJLocal.SearchPaths = append(rjInfo.RJLocal.SearchPaths[:index], rjInfo.RJLocal.SearchPaths[index+1:]...)
+					update = true
+				}
+			}
+		}
+
+		if update {
+			return writeUpdate(projectRootPath, *rjInfo)
+		}
+
+		return nil
 	},
 }
 
 func init() {
-	pushCmd.Flags().BoolP("local", "l", false, "Builds the image from a local context.")
-	rootCmd.AddCommand(pushCmd)
+	removeCmd.AddCommand(removeSearchDirCmd)
 }

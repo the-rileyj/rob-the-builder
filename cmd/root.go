@@ -32,7 +32,7 @@ var projectRootPath string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "cob",
+	Use:   "rob",
 	Short: "ROB is a build tool for React projects in RJ's site.",
 	Long: `ROB is a build tool for React projects in RJ's site.
 

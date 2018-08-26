@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -147,6 +148,7 @@ func buildProjectRemotely(rootPath, sitePath, githubURL string) error {
 	return err
 }
 
+// buildRoot builds the webserver in a docker container and outputs it to the project root
 func buildRoot(rootPath string) error {
 	buildName, goArch, goOS := rjServer, runtime.GOARCH, runtime.GOOS
 
@@ -233,6 +235,16 @@ func buildRoot(rootPath string) error {
 func checkProjectBuildHash(oldHash, projectPath string) bool {
 	for iteration := 0; iteration < 133; iteration++ {
 		if oldHash == dasher(projectPath, -1) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkProjectExistance checks if the project URL provided already exists (true)
+func checkProjectExistance(identifier string, projects []RJProject) bool {
+	for _, project := range projects {
+		if project.URL == identifier {
 			return true
 		}
 	}
@@ -407,6 +419,23 @@ func getDirMap(rootDir, dirName string, fromRoot uint64) dirMap {
 	return returnDirMap
 }
 
+func getGithubToken(path string) (string, error) {
+	file, err := os.Open(path)
+	defer file.Close()
+
+	if err != nil {
+		return "", err
+	}
+
+	token := githubToken{}
+
+	if err := json.NewDecoder(file).Decode(&token); err != nil {
+		return "", err
+	}
+
+	return token.Token, nil
+}
+
 func getLocalProjectCommit(projectPath string) (string, error) {
 	repository, err := git.PlainOpen(projectPath)
 
@@ -423,6 +452,38 @@ func getLocalProjectCommit(projectPath string) (string, error) {
 	remoteHash := ref.Hash()
 
 	return remoteHash.String(), nil
+}
+
+func getProjectDescription(projectName, token string) (string, error) {
+	requestQuery := query{fmt.Sprintf(descriptionQuery, projectName)}
+	buffer := new(bytes.Buffer)
+	json.NewEncoder(buffer).Encode(requestQuery)
+
+	request, err := http.NewRequest("POST", "https://api.github.com/graphql", buffer)
+
+	if err != nil {
+		return "", err
+	}
+
+	request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	client := &http.Client{}
+
+	queryResponse, err := client.Do(request)
+
+	if err != nil {
+		return "", err
+	}
+
+	descriptionResponse := response{}
+
+	err = json.NewDecoder(queryResponse.Body).Decode(&descriptionResponse)
+
+	if err != nil {
+		return "", err
+	}
+
+	return descriptionResponse.Data.Repository.Description, nil
 }
 
 func getProjectIndex(identifier string, projects []RJProject) int {
@@ -741,11 +802,12 @@ func prettyPrintStruct(structure interface{}, spaces uint64) error {
 }
 
 func printProject(project RJProject, localProjects RJLocal, spaces uint64) error {
+	fmt.Printf("\n%s\n%s\n", project.Name, strings.Repeat("=", len(project.Name)))
 	err := prettyPrintStruct(project, spaces)
 
 	if err != nil {
-		fmt.Println(errors.Wrap(err, "could not print the project"))
-		fmt.Printf("%s\n%s\n", project.Name, strings.Repeat("=", len(project.Name)))
+		fmt.Println(errors.Wrap(err, "could not print the project: "))
+		fmt.Printf("%s\n", strings.Repeat("_", len(project.Name)))
 		return err
 	}
 
@@ -754,13 +816,13 @@ func printProject(project RJProject, localProjects RJLocal, spaces uint64) error
 		err = prettyPrintStruct(localProject, spaces)
 
 		if err != nil {
-			fmt.Println(errors.Wrap(err, "could not print the project"))
-			fmt.Printf("%s\n%s\n", project.Name, strings.Repeat("=", len(project.Name)))
+			fmt.Println(errors.Wrap(err, "could not print the local project"))
+			fmt.Printf("%s\n", strings.Repeat("_", len(project.Name)))
 			return err
 		}
 	}
 
-	fmt.Printf("%s\n%s\n", project.Name, strings.Repeat("=", len(project.Name)))
+	fmt.Printf("%s\n", strings.Repeat("_", len(project.Name)))
 	return nil
 }
 
@@ -802,6 +864,40 @@ func removeContents(directoryPath string) error {
 			return err
 		}
 	}
+
+	return nil
+}
+
+func removeProjectLocally(project string, rjInfo *RJInfo) error {
+	var err error
+	index := getProjectIndex(project, rjInfo.RJGlobal.Projects)
+
+	if index == -1 {
+		return errors.New("project specified does not exist")
+	}
+
+	projectID := rjInfo.RJGlobal.Projects[index].ID
+	projectName := rjInfo.RJGlobal.Projects[index].Name
+	projectPath := rjInfo.RJLocal.Projects[projectID].Path
+
+	_, localProjectExists := rjInfo.RJLocal.Projects[projectID]
+
+	if !localProjectExists {
+		return fmt.Errorf("project %s does not exist locally", projectName)
+	}
+
+	if rjInfo.RJLocal.Projects[projectID].Path != "" {
+		if _, err = os.Stat(filepath.Join(projectPath, ".RJtag")); err == nil {
+			err = os.Remove(path.Join(rjInfo.RJLocal.Projects[projectID].Path, ".RJtag"))
+
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	delete(rjInfo.RJLocal.Projects, projectID)
+	fmt.Printf("Deleted Project %s Locally.\n", projectName)
 
 	return nil
 }
@@ -901,8 +997,14 @@ func rjBuild(rjInfo *RJInfo, rjProject RJProject, projectRoot string, force bool
 	return true, nil
 }
 
-func rjPushRob(tag string) error {
+func rjPushRob(tag string, local bool) error {
 	robLocation := filepath.Dir(os.Args[0])
+
+	robLocation, err := filepath.Abs(robLocation)
+
+	if err != nil {
+		return err
+	}
 
 	// Equivalent to "build --no-cache -t {tag} -f - /path/to/rob"
 	runRobInstallerArgs := []string{
@@ -912,7 +1014,13 @@ func rjPushRob(tag string) error {
 
 	cmd := exec.Command("docker", runRobInstallerArgs...)
 
-	cmd.Stdin = bytes.NewBufferString(robInstaller)
+	cmd.Dir = robLocation
+
+	if local {
+		cmd.Stdin = bytes.NewBufferString(robInstallBuilderLocal)
+	} else {
+		cmd.Stdin = bytes.NewBufferString(robInstallBuilderRemote)
+	}
 
 	cmd.Stdout = os.Stdout
 
@@ -925,7 +1033,7 @@ func rjPushRob(tag string) error {
 		syscall.SIGQUIT,
 	)
 
-	err := cmd.Start()
+	err = cmd.Start()
 
 	if err != nil {
 		return err
@@ -1062,4 +1170,26 @@ func writeUpdate(rootPath string, rjInfo RJInfo) error {
 	}
 
 	return nil
+}
+
+func writeRjTag(projectID, localPath string) error {
+	if _, err := os.Stat(path.Join(localPath, ".RJtag")); err == nil {
+		if rjTagFileBytes, err := ioutil.ReadFile(path.Join(localPath, ".RJtag")); err == nil {
+			if string(rjTagFileBytes) == projectID {
+				return nil
+			}
+		}
+	}
+
+	rjTagFile, err := os.Create(path.Join(localPath, ".RJtag"))
+
+	defer rjTagFile.Close()
+
+	if err != nil {
+		return errors.Wrap(err, "Could not automatically generate .RJtag file in the new project's local path.")
+	}
+
+	_, err = rjTagFile.WriteString(projectID)
+
+	return err
 }
